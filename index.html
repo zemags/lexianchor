@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#6d5dfc">
+  <meta name="description" content="Локальное приложение для интервального повторения греческих слов с SQLite.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+  <title>LexiAnchor — Greek trainer</title>
+</head>
+<body>
+  <div id="bootScreen" class="boot-screen">
+    <div class="boot-logo">Λ</div>
+    <div class="boot-title">LexiAnchor</div>
+    <div class="boot-subtitle">Подготавливаю локальную SQLite-базу…</div>
+    <div class="boot-loader"><span></span></div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <button class="brand nav-action" data-page="dashboard" aria-label="На главную">
+        <span class="brand-mark">Λ</span>
+        <span><strong>LexiAnchor</strong><small>Greek memory lab</small></span>
+      </button>
+      <nav class="side-nav" aria-label="Основная навигация">
+        <button class="nav-item active" data-page="dashboard"><span>⌂</span>Обзор</button>
+        <button class="nav-item" data-page="decks"><span>▦</span>Сборники</button>
+        <button class="nav-item" data-page="study"><span>◆</span>Тренировка</button>
+        <button class="nav-item" data-page="import"><span>⇄</span>Импорт и база</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="local-badge"><span class="pulse-dot"></span><div><strong>Локально</strong><small>Данные остаются на устройстве</small></div></div>
+        <button id="installButton" class="button ghost compact hidden">Установить приложение</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p id="pageEyebrow" class="eyebrow">ТВОЙ ПРОГРЕСС</p>
+          <h1 id="pageTitle">Обзор</h1>
+        </div>
+        <div class="top-actions">
+          <div id="dbStatus" class="db-status" title="SQLite автоматически сохраняется в браузере"><span></span>SQLite сохранена</div>
+          <button id="quickStudyButton" class="button primary">Начать тренировку</button>
+        </div>
+      </header>
+
+      <section id="page-dashboard" class="page active">
+        <div class="hero-card">
+          <div class="hero-copy">
+            <span class="hero-kicker">Μικρά βήματα, μεγάλη πρόοδος</span>
+            <h2>Небольшие повторения.<br>Устойчивая память.</h2>
+            <p>Выбирай нужные сборники, тренируй слова в случайном порядке и переноси одну SQLite-базу между ноутбуком и телефоном.</p>
+            <button class="button light nav-action" data-page="study">Тренировать сейчас <span>→</span></button>
+          </div>
+          <div class="hero-visual" aria-hidden="true">
+            <div class="orbit orbit-a"></div><div class="orbit orbit-b"></div>
+            <div class="greek-glyph">ελ</div>
+            <div class="float-chip chip-a">καλημέρα</div>
+            <div class="float-chip chip-b">μνήμη</div>
+            <div class="float-chip chip-c">λέξη</div>
+          </div>
+        </div>
+
+        <div id="statsGrid" class="stats-grid"></div>
+
+        <div class="dashboard-grid">
+          <article class="panel">
+            <div class="panel-head"><div><span class="panel-kicker">7 ДНЕЙ</span><h3>Ритм повторений</h3></div><span id="weeklyTotal" class="metric-chip">0 карточек</span></div>
+            <div id="weeklyChart" class="weekly-chart"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><span class="panel-kicker">СБОРНИКИ</span><h3>Ближайшие цели</h3></div><button class="text-button nav-action" data-page="decks">Все сборники</button></div>
+            <div id="dashboardDecks" class="deck-progress-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-decks" class="page">
+        <div class="section-toolbar">
+          <div class="search-wrap"><span>⌕</span><input id="deckSearch" type="search" placeholder="Найти сборник или слово"></div>
+          <button id="newDeckButton" class="button ghost">＋ Новый сборник</button>
+          <button id="newCardButton" class="button secondary">＋ Новая карточка</button>
+          <button class="button primary nav-action" data-page="import">＋ Импортировать CSV</button>
+        </div>
+        <div id="decksGrid" class="decks-grid"></div>
+        <div id="cardsPanel" class="panel cards-panel hidden">
+          <div class="panel-head">
+            <div><span class="panel-kicker">КАРТОЧКИ</span><h3 id="cardsPanelTitle">Сборник</h3></div>
+            <button id="closeCardsPanel" class="icon-button" aria-label="Закрыть">×</button>
+          </div>
+          <div id="cardsTable" class="cards-table"></div>
+        </div>
+      </section>
+
+      <section id="page-study" class="page">
+        <div id="studySetup" class="study-layout">
+          <article class="panel study-config">
+            <span class="panel-kicker">НАСТРОЙКА СЕССИИ</span>
+            <h2>Что повторяем?</h2>
+            <p class="muted">Можно выбрать один сборник, несколько или все сразу.</p>
+            <div class="selection-head"><button id="selectAllDecks" class="text-button">Выбрать все</button><span id="selectedCount">0 выбрано</span></div>
+            <div id="studyDeckList" class="study-deck-list"></div>
+            <div class="config-row">
+              <div><strong>Только карточки по расписанию</strong><small>Новые и подошедшие к повторению</small></div>
+              <label class="switch"><input id="dueOnlyToggle" type="checkbox" checked><span></span></label>
+            </div>
+            <label class="field compact-field"><span>Лимит карточек</span><input id="studyLimit" type="number" min="1" max="500" value="30"></label>
+            <button id="startStudyButton" class="button primary full">Начать случайную тренировку</button>
+          </article>
+          <article class="study-preview">
+            <div class="mini-card-stack"><div></div><div></div><div class="mini-card"><span>εικόνα</span><strong>θυμάμαι</strong><small>[θiˈmame]</small></div></div>
+            <h3>Интервальное повторение</h3>
+            <p>Сложные слова вернутся раньше, хорошо знакомые — позже. В любой момент можно тренировать все карточки без расписания.</p>
+          </article>
+        </div>
+
+        <div id="studySession" class="study-session hidden">
+          <div class="session-top">
+            <button id="exitStudyButton" class="button ghost compact">← Завершить</button>
+            <div class="session-progress-wrap"><div class="session-meta"><span id="sessionCounter">1 / 10</span><span id="sessionDeckName">Сборник</span></div><div class="progress-track"><div id="sessionProgress" class="progress-fill"></div></div></div>
+            <div id="sessionScore" class="session-score">0 ✓</div>
+          </div>
+
+          <div class="flashcard-stage">
+            <article id="flashcard" class="flashcard" tabindex="0" aria-label="Карточка. Нажмите, чтобы перевернуть">
+              <div class="flashcard-inner">
+                <div class="flashcard-face flashcard-front">
+                  <div class="card-topline"><span id="cardDeckBadge" class="deck-badge">Сборник</span><button id="speakButton" class="round-button" aria-label="Произнести по-гречески">◖))</button></div>
+                  <div id="cardImageBox" class="card-image-box"><div class="image-placeholder"><span>✦</span><small>Добавь визуальный якорь</small></div></div>
+                  <div class="word-block"><div id="cardWord" class="card-word"></div><div id="cardWordTranscription" class="transcription"></div></div>
+                  <div class="example-block"><span class="example-label">ПРИМЕР</span><div id="cardExample" class="example-text"></div><div id="cardExampleTranscription" class="example-transcription"></div></div>
+                  <div class="flip-hint">Нажми, чтобы увидеть перевод <span>↻</span></div>
+                </div>
+                <div class="flashcard-face flashcard-back">
+                  <div class="card-topline"><span class="deck-badge">ПЕРЕВОД</span><span class="back-glyph">EL → RU</span></div>
+                  <div class="translation-main"><span class="translation-label">СЛОВО / ФРАЗА</span><div id="cardTranslation" class="translation-word"></div></div>
+                  <div class="translation-example"><span class="translation-label">ПЕРЕВОД ПРИМЕРА</span><div id="cardExampleTranslation"></div></div>
+                  <div id="cardHintBox" class="hint-box"><span>✦</span><div><strong>Подсказка / нюанс</strong><p id="cardHint"></p></div></div>
+                  <div class="flip-hint">Нажми, чтобы вернуться <span>↻</span></div>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div id="revealActions" class="reveal-actions"><button id="revealButton" class="button primary wide">Показать перевод</button></div>
+          <div id="ratingActions" class="rating-actions hidden">
+            <button class="rating again" data-rating="0"><strong>Снова</strong><small>через 10 мин</small></button>
+            <button class="rating hard" data-rating="1"><strong>Трудно</strong><small id="hardInterval">1 день</small></button>
+            <button class="rating good" data-rating="2"><strong>Хорошо</strong><small id="goodInterval">3 дня</small></button>
+            <button class="rating easy" data-rating="3"><strong>Легко</strong><small id="easyInterval">4 дня</small></button>
+          </div>
+        </div>
+
+        <div id="studyFinished" class="finish-card hidden">
+          <div class="finish-icon">✓</div><span class="panel-kicker">СЕССИЯ ЗАВЕРШЕНА</span><h2>Отличная работа!</h2><p id="finishSummary"></p>
+          <div id="finishStats" class="finish-stats"></div>
+          <div class="finish-actions"><button id="restartStudyButton" class="button primary">Ещё одна сессия</button><button class="button ghost nav-action" data-page="dashboard">На главную</button></div>
+        </div>
+      </section>
+
+      <section id="page-import" class="page">
+        <div class="import-grid">
+          <article class="panel import-panel">
+            <span class="panel-kicker">CSV → НОВЫЙ СБОРНИК</span><h2>Импорт карточек</h2>
+            <p class="muted">Поддерживаются CSV, TSV и файлы Excel, сохранённые как CSV. Названия колонок сопоставляются автоматически.</p>
+            <label class="field"><span>Название нового сборника</span><input id="importDeckName" type="text" placeholder="Например: Урок 12 — Транспорт"></label>
+            <label id="csvDropzone" class="dropzone" for="csvFileInput"><input id="csvFileInput" type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" hidden><span class="drop-icon">⇧</span><strong>Выбрать CSV-файл</strong><small>или перетащить его сюда</small></label>
+            <div id="csvPreview" class="csv-preview hidden"></div>
+            <button id="importCsvButton" class="button primary full" disabled>Импортировать как отдельный сборник</button>
+          </article>
+
+          <article class="panel db-panel">
+            <span class="panel-kicker">ПЕРЕНОС МЕЖДУ УСТРОЙСТВАМИ</span><h2>SQLite-база</h2>
+            <div class="db-illustration"><div class="device laptop">▰</div><div class="transfer-line"><span>•</span><span>•</span><span>•</span></div><div class="device phone">▯</div></div>
+            <p>На ноутбуке импортируй CSV и добавь картинки, затем экспортируй один файл базы. На телефоне открой приложение и загрузи этот файл.</p>
+            <div id="databaseInfo" class="database-info"></div>
+            <button id="exportDbButton" class="button secondary full">Скачать текущую .sqlite</button>
+            <label class="button ghost full file-button">Загрузить .sqlite с устройства<input id="dbFileInput" type="file" accept=".sqlite,.sqlite3,.db,application/x-sqlite3" hidden></label>
+            <div class="warning-note"><strong>Важно</strong><span>Загрузка базы заменяет локальную базу на этом устройстве. Перед заменой приложение предложит сохранить резервную копию.</span></div>
+          </article>
+        </div>
+
+        <article class="panel columns-panel">
+          <div class="panel-head"><div><span class="panel-kicker">ОЖИДАЕМЫЕ КОЛОНКИ</span><h3>Структура CSV</h3></div><div><a class="text-button" href="sample_cards.csv" download>Пример CSV</a><a class="text-button" href="demo.sqlite" download>Демо SQLite</a></div></div>
+          <div class="column-chips"><span>Слово / фраза</span><span>Транскрипция слова</span><span>Перевод слова</span><span>Пример на греческом</span><span>Транскрипция</span><span>Перевод примера</span><span>Подсказка / нюанс</span></div>
+        </article>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Мобильная навигация">
+      <button class="nav-item active" data-page="dashboard"><span>⌂</span><small>Обзор</small></button>
+      <button class="nav-item" data-page="decks"><span>▦</span><small>Сборники</small></button>
+      <button class="nav-item study-tab" data-page="study"><span>◆</span><small>Учить</small></button>
+      <button class="nav-item" data-page="import"><span>⇄</span><small>Импорт</small></button>
+    </nav>
+  </div>
+
+  <dialog id="cardDialog" class="modal">
+    <form id="cardForm" method="dialog">
+      <div class="modal-head"><div><span class="panel-kicker">РЕДАКТОР</span><h2 id="cardDialogTitle">Новая карточка</h2></div><button type="button" id="closeCardDialog" class="icon-button">×</button></div>
+      <input id="cardId" type="hidden">
+      <div class="form-grid">
+        <label class="field"><span>Сборник *</span><select id="cardDeckId" required></select></label>
+        <label class="field"><span>Слово / фраза *</span><input id="editWord" type="text" required></label>
+        <label class="field"><span>Транскрипция слова</span><input id="editWordTranscription" type="text"></label>
+        <label class="field"><span>Перевод слова</span><input id="editWordTranslation" type="text"></label>
+        <label class="field full-span"><span>Пример на греческом</span><textarea id="editExampleEl" rows="2"></textarea></label>
+        <label class="field full-span"><span>Транскрипция примера</span><textarea id="editExampleTranscription" rows="2"></textarea></label>
+        <label class="field full-span"><span>Перевод примера</span><textarea id="editExampleTranslation" rows="2"></textarea></label>
+        <label class="field full-span"><span>Подсказка / нюанс</span><textarea id="editHint" rows="2"></textarea></label>
+      </div>
+      <div class="image-editor">
+        <div id="editImagePreview" class="edit-image-preview"><div><span>✦</span><small>Изображение-якорь</small></div></div>
+        <div class="image-tools">
+          <strong>Картинка для запоминания</strong>
+          <p>Открой Google Картинки и скопируй подходящее изображение. На телефоне нажми «Вставить из буфера»; также можно выбрать сохранённую картинку из «Фото» или «Файлов».</p>
+          <div class="button-row">
+            <button type="button" id="googleImagesButton" class="button ghost compact">⌕ Google Картинки</button>
+            <button type="button" id="pasteImageButton" class="button secondary compact">⎘ Вставить из буфера</button>
+            <label class="button secondary compact file-button">Выбрать картинку<input id="cardImageInput" type="file" accept="image/*" hidden></label>
+            <button type="button" id="removeImageButton" class="text-button danger">Удалить</button>
+          </div>
+          <div id="mobilePasteFallback" class="paste-fallback hidden" aria-live="polite">
+            <div class="paste-fallback-head">
+              <div><strong>Вставка на iPhone / iPad</strong><small>Нажми и удерживай поле ниже, затем выбери «Вставить».</small></div>
+              <button type="button" id="closePasteFallback" class="icon-button compact-icon" aria-label="Закрыть подсказку">×</button>
+            </div>
+            <div id="pasteTarget" class="paste-target" contenteditable="true" inputmode="none" role="textbox" aria-label="Область для вставки изображения" data-placeholder="Нажми и удерживай здесь → Вставить"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions"><button type="button" id="deleteCardButton" class="button danger hidden">Удалить карточку</button><span></span><button type="button" id="cancelCardButton" class="button ghost">Отмена</button><button type="submit" class="button primary">Сохранить</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="modal confirm-modal">
+    <form method="dialog"><div class="confirm-icon">!</div><h2 id="confirmTitle">Подтверждение</h2><p id="confirmText"></p><div class="modal-actions centered"><button id="confirmCancel" value="cancel" class="button ghost">Отмена</button><button id="confirmOk" value="ok" class="button danger">Продолжить</button></div></form>
+  </dialog>
+
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/sql.js@1.14.1/dist/sql-wasm.js"></script>
+  <script src="db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
