@@ -1,94 +1,107 @@
-# LexiAnchor — Greek Trainer
+# LexiAnchor — Greek Trainer v1.2
 
-A mobile PWA application with decks, spaced repetition, mnemonic images, CSV import, and a portable SQLite database. No server or account is required — all data stays on the device.
+Мобильное PWA-приложение для изучения греческого: сборники, интервальное повторение, тест с четырьмя вариантами, изображения-якоря, CSV-импорт и переносимая SQLite-база. Сервер и аккаунт не нужны — пользовательские данные остаются на устройстве.
 
-## Quick Start on a Laptop
+## Что нового в v1.2
+
+- Полностью переработанный адаптивный дизайн.
+- Режим **«Четыре варианта»** с направлениями греческий → русский и русский → греческий.
+- Случайный порядок вопросов и вариантов.
+- После ответа показываются слово, транскрипция, перевод, пример, подсказка и изображение.
+- Итоговая статистика и повторение только ошибочных слов.
+- Выбор одного, нескольких или всех сборников.
+- Массовая **«Лаборатория картинок»** для карточек без визуального якоря.
+- Отдельная необязательная CSV-колонка `Поиск картинки`.
+- Поиск Google Картинок использует поле поискового запроса, лучше заполнять его по-английски.
+- Кнопка Pixabay подготовлена в интерфейсе, но пока неактивна.
+- На телефоне редактор больше не вызывает клавиатуру автоматически.
+- Картинки уменьшаются до 900×700, конвертируются в WebP и сохраняются внутри SQLite.
+- Старые базы v1/v1.1 автоматически обновляются до новой схемы без потери данных.
+
+## Быстрый запуск на ноутбуке
 
 ### macOS
 
-1. Extract the archive.
-2. Double-click `start.command`. If macOS blocks it, right-click the file and select **Open**.
-3. Open `http://localhost:8080` in Google Chrome.
+1. Распакуйте архив.
+2. Дважды нажмите `start.command`. Если macOS блокирует запуск: правой кнопкой → **Open**.
+3. Откройте `http://localhost:8080` в Google Chrome.
 
 ### Windows
 
-1. Extract the archive.
-2. Run `start.bat`.
-3. Open `http://localhost:8080` in Google Chrome.
+1. Распакуйте архив.
+2. Запустите `start.bat`.
+3. Откройте `http://localhost:8080` в Google Chrome.
 
-You can also start it manually:
+Можно запустить вручную:
 
 ```bash
 python3 server.py
 ```
 
-Do not open `index.html` directly by double-clicking it through `file://`. WebAssembly, the service worker, and PWA features require a web server.
+Не открывайте `index.html` через `file://`: WebAssembly, Service Worker и PWA требуют веб-сервер.
 
-## Using the App on a Phone
+## Установка на телефон
 
-### Option 1 — On the Same Wi-Fi Network as the Laptop
+Разместите содержимое папки на GitHub Pages или другом статическом HTTPS-хостинге.
 
-Start `server.py`, find the laptop’s local IP address, and open the following address on the phone:
+- Android Chrome: меню `⋮` → **Install app / Добавить на главный экран**.
+- iPhone Safari: **Поделиться** → **На экран «Домой»**.
 
-```text
-http://LAPTOP-IP:8080
-```
+После первого успешного запуска приложение и SQLite-библиотека сохраняются в браузерном кэше.
 
-This option is suitable for home use, but installing the PWA and using offline mode on a phone usually requires HTTPS. For a full installation, use Option 2.
+## Перенос базы
 
-### Option 2 — GitHub Pages or Any Static HTTPS Hosting
+1. Откройте **Импорт и база**.
+2. Нажмите **Скачать текущую .sqlite**.
+3. Передайте файл на другое устройство.
+4. На другом устройстве выберите **Загрузить .sqlite с устройства**.
 
-Upload the folder contents to a GitHub repository and enable GitHub Pages. The application is fully static: the database is not uploaded to GitHub and is stored locally in the user’s browser.
-
-After the first online launch, Chrome caches the application and the SQLite library. The app can then work offline. In Chrome on Android, open the `⋮` menu and select **Install app** or **Add to Home screen**.
-
-## Transferring the Database from a Laptop to a Phone
-
-1. On the laptop, import the CSV files, add images, and use the trainer.
-2. Open **Import & Database** → **Download Current .sqlite**.
-3. Transfer the file to the phone using Google Drive, Telegram Saved Messages, AirDrop, or a cable.
-4. On the phone, open LexiAnchor → **Import & Database** → **Load .sqlite from Device**.
-5. Before replacing the database, the application automatically downloads a backup copy of the current database.
-
-SQLite is automatically saved inside the browser after every change. Export is only required for backups and transferring the database between devices.
+Карточки, картинки, прогресс интервального повторения и результаты тестов хранятся в одном файле.
 
 ## CSV
 
-Tab-separated files, semicolon-separated files, and comma-separated files are supported. Only the `Слово / фраза` column is required; all other fields may be empty.
+Обязательна только колонка `Слово / фраза`. Поддерживаются разделители: табуляция, `;` и `,`.
 
-Expected columns:
+Колонки:
 
-* Слово / фраза
-* Транскрипция слова
-* Перевод слова
-* Пример на греческом
-* Транскрипция
-* Перевод примера
-* Подсказка / нюанс
+- Слово / фраза
+- Транскрипция слова
+- Перевод слова
+- Пример на греческом
+- Транскрипция
+- Перевод примера
+- Подсказка / нюанс
+- Поиск картинки — необязательно, рекомендуется короткий запрос на английском
 
-The `sample_cards.csv` file can be opened in Excel or Google Sheets as an example. The `demo.sqlite` file is a ready-to-use test database with three cards and can be loaded immediately through the **Import & Database** section.
+## Картинки
 
-## Images
+В редакторе карточки доступны:
 
-In the card editor, the **Google Images** button opens a search using the original Greek word. Save a suitable image and select it in the application. On a computer, you can also copy an image and paste it into the open card editor.
+- Google Картинки;
+- вставка изображения из буфера;
+- выбор изображения из Фото или Файлов;
+- неактивная кнопка Pixabay для будущего встроенного поиска.
 
-Automatic downloading of the first Google image is intentionally not used. It requires an external search API, may stop working because of blocking or API changes, and does not guarantee that the image may legally be reused.
+Для быстрой массовой обработки откройте **Сборники** → **Подобрать картинки** или кнопку **Картинки** у конкретного сборника. После сохранения приложение сразу переходит к следующей карточке без изображения.
 
-Images are resized to a maximum of 1280×900, converted to WebP, and stored directly inside the SQLite database. The card uses `object-fit: contain`, so the image is not cropped.
+## Горячие клавиши
 
-## Keyboard Shortcuts During Training
+### Карточки
 
-* `Space` — flip the card
-* `1` — Again
-* `2` — Hard
-* `3` — Good
-* `4` — Easy
+- `Space` — перевернуть карточку
+- `1` — Снова
+- `2` — Трудно
+- `3` — Хорошо
+- `4` — Легко
 
-## Technical Foundation
+### Тест
 
-* HTML, CSS, and JavaScript without a framework
-* `sql.js` / SQLite WebAssembly
-* IndexedDB for automatic local storage of the exportable SQLite file
-* Web App Manifest and Service Worker for PWA installation and offline caching
+- `1`–`4` — выбрать вариант
+- `Space` или `Enter` — следующий вопрос после ответа
 
-An internet connection is required during the first launch to load `sql.js` from the CDN. After a successful launch, the service worker stores the library in the browser cache.
+## Техническая основа
+
+- HTML/CSS/JavaScript без фреймворка
+- `sql.js` / SQLite WebAssembly
+- IndexedDB для автоматического хранения экспортируемого SQLite-файла
+- Web App Manifest + Service Worker

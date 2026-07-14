@@ -100,8 +100,12 @@
         example_transcription TEXT DEFAULT '',
         example_translation TEXT DEFAULT '',
         hint TEXT DEFAULT '',
+        image_search_query TEXT DEFAULT '',
         image_blob BLOB,
         image_mime TEXT DEFAULT '',
+        image_source TEXT DEFAULT '',
+        image_author TEXT DEFAULT '',
+        image_source_url TEXT DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -125,14 +129,28 @@
         reviewed_at TEXT NOT NULL,
         review_date TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS quiz_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+        deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+        direction TEXT NOT NULL,
+        correct INTEGER NOT NULL,
+        answered_at TEXT NOT NULL,
+        answer_date TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_cards_deck ON cards(deck_id);
       CREATE INDEX IF NOT EXISTS idx_srs_due ON srs(due_at);
       CREATE INDEX IF NOT EXISTS idx_reviews_date ON reviews(review_date);
-      INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '1');
+      CREATE INDEX IF NOT EXISTS idx_quiz_reviews_date ON quiz_reviews(answer_date);
+      INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
     `);
 
     // Forward-compatible additions for old app databases.
     if (!columnExists('cards', 'image_mime')) run("ALTER TABLE cards ADD COLUMN image_mime TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_search_query')) run("ALTER TABLE cards ADD COLUMN image_search_query TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_source')) run("ALTER TABLE cards ADD COLUMN image_source TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_author')) run("ALTER TABLE cards ADD COLUMN image_author TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_source_url')) run("ALTER TABLE cards ADD COLUMN image_source_url TEXT DEFAULT ''");
   }
 
   async function init() {
@@ -269,9 +287,10 @@
     run(`
       INSERT INTO cards(
         deck_id, word, word_transcription, word_translation, example_el,
-        example_transcription, example_translation, hint, image_blob, image_mime,
+        example_transcription, example_translation, hint, image_search_query,
+        image_blob, image_mime, image_source, image_author, image_source_url,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       card.deck_id,
       card.word.trim(),
@@ -281,8 +300,12 @@
       card.example_transcription || '',
       card.example_translation || '',
       card.hint || '',
+      card.image_search_query || '',
       card.image_blob || null,
       card.image_mime || '',
+      card.image_source || '',
+      card.image_author || '',
+      card.image_source_url || '',
       timestamp,
       timestamp
     ]);
@@ -298,7 +321,8 @@
     run(`
       UPDATE cards SET deck_id = ?, word = ?, word_transcription = ?, word_translation = ?,
         example_el = ?, example_transcription = ?, example_translation = ?, hint = ?,
-        image_blob = ?, image_mime = ?, updated_at = ?
+        image_search_query = ?, image_blob = ?, image_mime = ?, image_source = ?,
+        image_author = ?, image_source_url = ?, updated_at = ?
       WHERE id = ?
     `, [
       card.deck_id,
@@ -309,8 +333,12 @@
       card.example_transcription || '',
       card.example_translation || '',
       card.hint || '',
+      card.image_search_query || '',
       card.image_blob || null,
       card.image_mime || '',
+      card.image_source || '',
+      card.image_author || '',
+      card.image_source_url || '',
       timestamp,
       card.id
     ]);
@@ -335,9 +363,10 @@
       const cardStmt = db.prepare(`
         INSERT INTO cards(
           deck_id, word, word_transcription, word_translation, example_el,
-          example_transcription, example_translation, hint, image_blob, image_mime,
+          example_transcription, example_translation, hint, image_search_query,
+          image_blob, image_mime, image_source, image_author, image_source_url,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, '', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', '', '', '', ?, ?)
       `);
       const srsStmt = db.prepare('INSERT INTO srs(card_id, due_at, interval_days, ease, repetitions, lapses) VALUES (?, ?, 0, 2.5, 0, 0)');
       try {
@@ -351,6 +380,7 @@
             card.example_transcription || '',
             card.example_translation || '',
             card.hint || '',
+            card.image_search_query || '',
             timestamp,
             timestamp
           ]);
@@ -463,6 +493,49 @@
     }
   }
 
+
+  function getCardsWithoutImages(deckIds = []) {
+    const params = [];
+    let deckFilter = '';
+    if (deckIds.length) {
+      deckFilter = `AND c.deck_id IN (${deckIds.map(() => '?').join(',')})`;
+      params.push(...deckIds);
+    }
+    return rows(`
+      SELECT c.*, d.name AS deck_name, s.due_at, s.interval_days, s.ease, s.repetitions, s.lapses
+      FROM cards c
+      JOIN decks d ON d.id = c.deck_id
+      JOIN srs s ON s.card_id = c.id
+      WHERE (c.image_blob IS NULL OR length(c.image_blob) = 0) ${deckFilter}
+      ORDER BY d.name COLLATE NOCASE, c.id
+    `, params).map(normalizeCard);
+  }
+
+  function recordQuizAnswer(cardId, correct, direction) {
+    const card = getCard(cardId);
+    if (!card) return;
+    const timestamp = nowIso();
+    run(`
+      INSERT INTO quiz_reviews(card_id, deck_id, direction, correct, answered_at, answer_date)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [cardId, card.deck_id, direction, correct ? 1 : 0, timestamp, localDate()]);
+    scheduleSave();
+  }
+
+  function getQuizStats(days = 30) {
+    const since = new Date();
+    since.setDate(since.getDate() - Math.max(1, Number(days) || 30));
+    const result = one(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END) AS correct
+      FROM quiz_reviews
+      WHERE answer_date >= ?
+    `, [localDate(since)]);
+    const total = Number(result?.total || 0);
+    const correct = Number(result?.correct || 0);
+    return { total, correct, accuracy: total ? Math.round((correct / total) * 100) : 0 };
+  }
+
   function getStats() {
     const today = localDate();
     const overview = one(`
@@ -521,6 +594,7 @@
     return {
       decks: Number(scalar('SELECT COUNT(*) FROM decks') || 0),
       cards: Number(scalar('SELECT COUNT(*) FROM cards') || 0),
+      images: Number(scalar('SELECT COUNT(*) FROM cards WHERE image_blob IS NOT NULL AND length(image_blob) > 0') || 0),
       bytes: bytes.length
     };
   }
@@ -565,6 +639,9 @@
     deleteCard,
     importCards,
     getStudyCards,
+    getCardsWithoutImages,
+    recordQuizAnswer,
+    getQuizStats,
     previewIntervals,
     rateCard,
     getStats,

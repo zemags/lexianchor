@@ -3,26 +3,37 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
   const state = {
     page: 'dashboard',
     decks: [],
     activeDeckId: null,
     csvRows: [],
     csvFileName: '',
+    deferredInstallPrompt: null,
+    studyMode: 'flashcards',
+    study: null,
+    lastQuizMistakes: [],
+    lastQuizConfig: null,
+    quizImageUrl: null,
+    quizAutoTimer: null,
+    cardImageUrl: null,
+    previewImageUrl: null,
     editImageBytes: null,
     editImageMime: '',
     editImageRemoved: false,
-    previewImageUrl: null,
-    cardImageUrl: null,
-    deferredInstallPrompt: null,
-    study: null
+    editImageSource: '',
+    editImageAuthor: '',
+    editImageSourceUrl: '',
+    pendingImageSource: null,
+    imageLab: null
   };
 
   const pageMeta = {
     dashboard: ['ТВОЙ ПРОГРЕСС', 'Обзор'],
-    decks: ['КОЛЛЕКЦИЯ', 'Сборники'],
+    decks: ['ТВОЯ КОЛЛЕКЦИЯ', 'Сборники'],
     study: ['ФОКУС-СЕССИЯ', 'Тренировка'],
-    import: ['ДАННЫЕ', 'Импорт и база']
+    import: ['ДАННЫЕ И ПЕРЕНОС', 'Импорт и база']
   };
 
   document.addEventListener('DOMContentLoaded', boot);
@@ -38,7 +49,7 @@
     } catch (error) {
       console.error(error);
       $('.boot-subtitle').textContent = error.message || 'Не удалось открыть SQLite-базу';
-      $('.boot-loader').remove();
+      $('.boot-loader')?.remove();
     }
   }
 
@@ -47,11 +58,12 @@
     $('#quickStudyButton').addEventListener('click', () => showPage('study'));
     $('#newDeckButton').addEventListener('click', createDeckFlow);
     $('#newCardButton').addEventListener('click', () => openCardDialog());
-    $('#closeCardsPanel').addEventListener('click', () => {
-      state.activeDeckId = null;
-      $('#cardsPanel').classList.add('hidden');
-    });
+    $('#imageLabAllButton').addEventListener('click', () => openImageLab([]));
+    $('#cardsImageLabButton').addEventListener('click', () => openImageLab(state.activeDeckId ? [state.activeDeckId] : []));
+    $('#closeCardsPanel').addEventListener('click', closeCardsPanel);
     $('#deckSearch').addEventListener('input', renderDecks);
+
+    $$('.mode-option').forEach((button) => button.addEventListener('click', () => setStudyMode(button.dataset.studyMode)));
     $('#selectAllDecks').addEventListener('click', toggleAllStudyDecks);
     $('#studyDeckList').addEventListener('change', updateSelectedDeckCount);
     $('#startStudyButton').addEventListener('click', startStudy);
@@ -59,6 +71,9 @@
     $('#flashcard').addEventListener('click', revealCard);
     $('#exitStudyButton').addEventListener('click', finishStudyEarly);
     $('#restartStudyButton').addEventListener('click', resetStudyUi);
+    $('#repeatMistakesButton').addEventListener('click', repeatQuizMistakes);
+    $('#quizNextButton').addEventListener('click', nextQuizQuestion);
+    $('#quizAnswers').addEventListener('click', handleQuizAnswerClick);
     $('#speakButton').addEventListener('click', (event) => {
       event.stopPropagation();
       speakCurrentWord();
@@ -72,10 +87,20 @@
     $('#cardImageInput').addEventListener('change', handleImageSelection);
     $('#removeImageButton').addEventListener('click', removeEditImage);
     $('#googleImagesButton').addEventListener('click', openGoogleImages);
-    $('#pasteImageButton').addEventListener('click', pasteImageFromClipboard);
+    $('#pasteImageButton').addEventListener('click', () => readClipboardImage(setEditImageFromFile, showPasteFallback));
     $('#closePasteFallback').addEventListener('click', hidePasteFallback);
     $('#pasteTarget').addEventListener('input', handlePasteTargetInput);
     $('#cardDialog').addEventListener('paste', handlePastedImage);
+
+    $('#closeImageLab').addEventListener('click', closeImageLab);
+    $('#imageLabGoogle').addEventListener('click', openImageLabGoogle);
+    $('#imageLabPaste').addEventListener('click', () => readClipboardImage(setImageLabImageFromFile, showImageLabPasteFallback));
+    $('#imageLabFile').addEventListener('change', handleImageLabFile);
+    $('#imageLabPasteTarget').addEventListener('input', handleImageLabPasteTargetInput);
+    $('#imageLabDialog').addEventListener('paste', handleImageLabPaste);
+    $('#imageLabSkip').addEventListener('click', skipImageLabCard);
+    $('#imageLabRemove').addEventListener('click', clearImageLabImage);
+    $('#imageLabSaveNext').addEventListener('click', saveImageLabAndNext);
 
     $('#csvFileInput').addEventListener('change', (event) => handleCsvFile(event.target.files[0]));
     $('#csvDropzone').addEventListener('dragover', (event) => {
@@ -110,7 +135,10 @@
       return;
     }
     const deckAction = event.target.closest('[data-deck-action]');
-    if (deckAction) handleDeckAction(deckAction.dataset.deckAction, Number(deckAction.dataset.deckId));
+    if (deckAction) {
+      handleDeckAction(deckAction.dataset.deckAction, Number(deckAction.dataset.deckId));
+      return;
+    }
     const cardAction = event.target.closest('[data-card-id]');
     if (cardAction) openCardDialog(Number(cardAction.dataset.cardId));
   }
@@ -138,11 +166,15 @@
 
   function renderDashboard() {
     const stats = LexiDB.getStats();
+    const dbInfo = LexiDB.getDatabaseInfo();
+    const quiz = LexiDB.getQuizStats(30);
+    const imageCoverage = dbInfo.cards ? Math.round((dbInfo.images / dbInfo.cards) * 100) : 0;
     const cards = [
       ['Карточек всего', formatNumber(stats.total), '▦'],
       ['На сегодня', formatNumber(stats.due), '◷'],
       ['Серия дней', `${stats.streak} ${plural(stats.streak, 'день', 'дня', 'дней')}`, '⚡'],
-      ['Точность сегодня', `${stats.accuracyToday}%`, '◎']
+      ['С картинками', `${imageCoverage}%`, '✦'],
+      ['Тесты за 30 дней', quiz.total ? `${quiz.accuracy}%` : '—', '4']
     ];
     $('#statsGrid').innerHTML = cards.map(([label, value, icon]) => `
       <article class="stat-card"><div class="stat-copy"><small>${label}</small><strong>${value}</strong></div><div class="stat-icon">${icon}</div></article>
@@ -183,16 +215,17 @@
     }
     const container = $('#decksGrid');
     if (!visible.length) {
-      container.innerHTML = emptyState(query ? 'Ничего не найдено' : 'Нет сборников', query ? 'Попробуй другой запрос.' : 'Создай пустой сборник или импортируй CSV.');
+      container.innerHTML = emptyState(query ? 'Ничего не найдено' : 'Нет сборников', query ? 'Попробуй другой запрос.' : 'Создай сборник или импортируй CSV.');
       return;
     }
     container.innerHTML = visible.map((deck) => {
       const learnedPct = deck.total ? Math.round((deck.learned / deck.total) * 100) : 0;
+      const missingImages = LexiDB.getCardsWithoutImages([deck.id]).length;
       return `<article class="deck-card">
         <div class="deck-card-top"><div class="deck-icon">${escapeHtml(deck.name.charAt(0).toUpperCase() || 'Λ')}</div><div class="deck-menu"><button data-deck-action="rename" data-deck-id="${deck.id}" title="Переименовать">✎</button><button data-deck-action="delete" data-deck-id="${deck.id}" title="Удалить">×</button></div></div>
         <h3>${escapeHtml(deck.name)}</h3><p>${deck.total} ${plural(deck.total, 'карточка', 'карточки', 'карточек')}</p>
         <div class="deck-card-stats"><div class="deck-stat"><strong>${deck.due}</strong><small>сегодня</small></div><div class="deck-stat"><strong>${deck.learned}</strong><small>изучено</small></div><div class="deck-stat"><strong>${learnedPct}%</strong><small>прогресс</small></div></div>
-        <div class="deck-actions"><button class="button ghost compact" data-deck-action="cards" data-deck-id="${deck.id}">Карточки</button><button class="button primary compact" data-deck-action="study" data-deck-id="${deck.id}">Учить</button></div>
+        <div class="deck-actions"><button class="button surface compact" data-deck-action="cards" data-deck-id="${deck.id}">Карточки</button><button class="button primary compact" data-deck-action="study" data-deck-id="${deck.id}">Учить</button><button class="button secondary compact deck-image-action" data-deck-action="images" data-deck-id="${deck.id}">✦ Картинки · ${missingImages}</button></div>
       </article>`;
     }).join('');
   }
@@ -202,7 +235,7 @@
     if (!name?.trim()) return;
     LexiDB.createDeck(name);
     await refreshAll();
-    toast('Сборник создан', 'success');
+    toast('Сборник создан');
   }
 
   async function handleDeckAction(action, deckId) {
@@ -215,23 +248,29 @@
       $('#cardsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } else if (action === 'study') {
       showPage('study');
-      await renderStudyDecks([deckId]);
-      startStudy();
+      renderStudyDecks([deckId]);
+    } else if (action === 'images') {
+      openImageLab([deckId]);
     } else if (action === 'rename') {
       const nextName = prompt('Новое название сборника:', deck.name);
       if (!nextName?.trim()) return;
       LexiDB.renameDeck(deckId, nextName);
       await refreshAll();
-      toast('Сборник переименован', 'success');
+      toast('Сборник переименован');
     } else if (action === 'delete') {
-      const ok = await confirmAction('Удалить сборник?', `Сборник «${deck.name}», его карточки и история повторений будут удалены.`, 'Удалить');
+      const ok = await confirmAction('Удалить сборник?', `Сборник «${deck.name}», его карточки и история будут удалены.`, 'Удалить');
       if (!ok) return;
       LexiDB.deleteDeck(deckId);
       if (state.activeDeckId === deckId) state.activeDeckId = null;
+      closeCardsPanel();
       await refreshAll();
-      $('#cardsPanel').classList.add('hidden');
-      toast('Сборник удалён', 'success');
+      toast('Сборник удалён');
     }
+  }
+
+  function closeCardsPanel() {
+    state.activeDeckId = null;
+    $('#cardsPanel').classList.add('hidden');
   }
 
   function renderCardsPanel(deckId) {
@@ -240,8 +279,16 @@
     $('#cardsPanelTitle').textContent = deck.name;
     const cards = LexiDB.getCards(deckId);
     $('#cardsTable').innerHTML = cards.length ? cards.map((card) => `
-      <div class="card-row"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')}</span><button class="button ghost" data-card-id="${card.id}">Изменить</button></div>
+      <div class="card-row"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')} ${card.image_blob?.length ? '· ✦' : '· без картинки'}</span><button class="button surface compact" data-card-id="${card.id}">Изменить</button></div>
     `).join('') : emptyState('В сборнике пока пусто', 'Добавь карточку вручную или импортируй CSV.');
+  }
+
+  function setStudyMode(mode) {
+    state.studyMode = mode === 'quiz' ? 'quiz' : 'flashcards';
+    $$('.mode-option').forEach((button) => button.classList.toggle('active', button.dataset.studyMode === state.studyMode));
+    $('#flashcardOptions').classList.toggle('hidden', state.studyMode !== 'flashcards');
+    $('#quizOptions').classList.toggle('hidden', state.studyMode !== 'quiz');
+    $('#startStudyButton').textContent = state.studyMode === 'quiz' ? 'Начать тест' : 'Начать тренировку';
   }
 
   function renderStudyDecks(preselected = null) {
@@ -257,7 +304,6 @@
     container.innerHTML = state.decks.map((deck) => `
       <label class="study-deck-option"><input type="checkbox" value="${deck.id}" ${defaultSelected.includes(deck.id) ? 'checked' : ''}><div><strong>${escapeHtml(deck.name)}</strong><small>${deck.total} карточек · ${deck.due} по расписанию</small></div><span>${deck.learned}/${deck.total}</span></label>
     `).join('');
-    $('#startStudyButton').disabled = false;
     updateSelectedDeckCount();
   }
 
@@ -275,15 +321,23 @@
   }
 
   function startStudy() {
+    clearTimeout(state.quizAutoTimer);
     const deckIds = $$('#studyDeckList input:checked').map((input) => Number(input.value));
+    const limit = Math.max(1, Math.min(Number($('#studyLimit').value || 30), 500));
+    if (!deckIds.length) return toast('Выбери хотя бы один сборник', 'error');
+    if (state.studyMode === 'quiz') startQuiz(deckIds, limit);
+    else startFlashcardStudy(deckIds, limit);
+  }
+
+  function startFlashcardStudy(deckIds, limit) {
     const dueOnly = $('#dueOnlyToggle').checked;
-    const limit = Number($('#studyLimit').value || 30);
     const cards = LexiDB.getStudyCards(deckIds, dueOnly, limit);
     if (!cards.length) {
-      toast(dueOnly ? 'Нет карточек, подошедших к повторению. Отключи режим «по расписанию».' : 'В выбранных сборниках нет карточек.', 'error');
+      toast(dueOnly ? 'Нет карточек по расписанию. Отключи этот переключатель.' : 'В выбранных сборниках нет карточек.', 'error');
       return;
     }
     state.study = {
+      mode: 'flashcards',
       queue: [...cards],
       initialTotal: cards.length,
       completed: 0,
@@ -293,15 +347,57 @@
       startedAt: Date.now(),
       flipped: false
     };
+    openStudySession('flashcards');
+    renderCurrentCard();
+  }
+
+  function startQuiz(deckIds, limit, forcedCards = null) {
+    const direction = $('#quizDirection').value;
+    const affectsSrs = $('#quizAffectsSrs').checked;
+    const autoNext = $('#quizAutoNext').checked;
+    const allSelectedCards = deckIds.flatMap((id) => LexiDB.getCards(id));
+    const field = direction === 'el-ru' ? 'word_translation' : 'word';
+    const promptField = direction === 'el-ru' ? 'word' : 'word_translation';
+    const validPool = allSelectedCards.filter((card) => String(card[field] || '').trim() && String(card[promptField] || '').trim());
+    const uniqueAnswers = new Set(validPool.map((card) => normalizeAnswer(card[field])));
+    if (uniqueAnswers.size < 4) {
+      toast('Для теста нужно минимум 4 карточки с уникальными ответами в выбранных сборниках.', 'error');
+      return;
+    }
+    let questions = forcedCards ? forcedCards.filter((card) => validPool.some((item) => item.id === card.id)) : shuffle([...validPool]).slice(0, limit);
+    if (!questions.length) return toast('Нет подходящих карточек для теста', 'error');
+    state.study = {
+      mode: 'quiz',
+      queue: questions,
+      pool: validPool,
+      index: 0,
+      initialTotal: questions.length,
+      answers: 0,
+      correct: 0,
+      wrongCards: [],
+      startedAt: Date.now(),
+      direction,
+      affectsSrs,
+      autoNext,
+      answered: false,
+      currentOptions: []
+    };
+    state.lastQuizConfig = { deckIds: [...deckIds], direction, affectsSrs, autoNext };
+    openStudySession('quiz');
+    renderQuizQuestion();
+  }
+
+  function openStudySession(mode) {
     $('#studySetup').classList.add('hidden');
     $('#studyFinished').classList.add('hidden');
     $('#studySession').classList.remove('hidden');
-    renderCurrentCard();
+    $('#flashcardSession').classList.toggle('hidden', mode !== 'flashcards');
+    $('#quizSession').classList.toggle('hidden', mode !== 'quiz');
   }
 
   function renderCurrentCard() {
     const study = state.study;
-    if (!study || !study.queue.length) {
+    if (!study || study.mode !== 'flashcards' || !study.queue.length) {
       finishStudy();
       return;
     }
@@ -317,15 +413,12 @@
     $('#cardExampleTranscription').textContent = card.example_transcription || '';
     $('#cardTranslation').textContent = card.word_translation || '—';
     $('#cardExampleTranslation').textContent = card.example_translation || '—';
-    $('#cardHint').textContent = card.hint || 'Подсказка не добавлена';
+    $('#cardHint').textContent = card.hint || '';
     $('#cardHintBox').classList.toggle('hidden', !card.hint);
     renderStudyImage(card);
 
     const visibleNumber = Math.min(study.completed + 1, study.initialTotal);
-    $('#sessionCounter').textContent = `${visibleNumber} / ${study.initialTotal}`;
-    $('#sessionDeckName').textContent = card.deck_name;
-    $('#sessionProgress').style.width = `${Math.round((study.completed / study.initialTotal) * 100)}%`;
-    $('#sessionScore').textContent = `${study.correct} ✓`;
+    setSessionHeader(visibleNumber, study.initialTotal, card.deck_name, study.completed, study.correct);
     const intervals = LexiDB.previewIntervals(card);
     $('#hardInterval').textContent = formatInterval(intervals[1]);
     $('#goodInterval').textContent = formatInterval(intervals[2]);
@@ -337,15 +430,15 @@
     state.cardImageUrl = null;
     const box = $('#cardImageBox');
     if (card.image_blob?.length) {
-      state.cardImageUrl = URL.createObjectURL(new Blob([card.image_blob], { type: card.image_mime || 'image/jpeg' }));
+      state.cardImageUrl = bytesToObjectUrl(card.image_blob, card.image_mime);
       box.innerHTML = `<img src="${state.cardImageUrl}" alt="Визуальный якорь для ${escapeHtml(card.word)}">`;
     } else {
-      box.innerHTML = '<div class="image-placeholder"><span>✦</span><small>Добавь визуальный якорь</small></div>';
+      box.innerHTML = '<div class="image-placeholder"><span>✦</span><small>У карточки пока нет визуального якоря</small></div>';
     }
   }
 
   function revealCard() {
-    if (!state.study || !state.study.queue.length) return;
+    if (!state.study || state.study.mode !== 'flashcards' || !state.study.queue.length) return;
     state.study.flipped = !state.study.flipped;
     $('#flashcard').classList.toggle('flipped', state.study.flipped);
     $('#revealActions').classList.toggle('hidden', state.study.flipped);
@@ -353,7 +446,7 @@
   }
 
   async function rateCurrentCard(rating) {
-    if (!state.study?.flipped || !state.study.queue.length) return;
+    if (!state.study?.flipped || state.study.mode !== 'flashcards' || !state.study.queue.length) return;
     const study = state.study;
     const card = study.queue.shift();
     LexiDB.rateCard(card.id, rating);
@@ -361,13 +454,115 @@
     if (rating === 0) {
       study.again += 1;
       const refreshed = LexiDB.getCard(card.id);
-      const insertionIndex = Math.min(3, study.queue.length);
-      study.queue.splice(insertionIndex, 0, refreshed);
+      study.queue.splice(Math.min(3, study.queue.length), 0, refreshed);
     } else {
       study.correct += 1;
       study.completed += 1;
     }
     renderCurrentCard();
+  }
+
+  function renderQuizQuestion() {
+    const study = state.study;
+    if (!study || study.mode !== 'quiz' || study.index >= study.queue.length) {
+      finishStudy();
+      return;
+    }
+    clearTimeout(state.quizAutoTimer);
+    revokeQuizImage();
+    const card = study.queue[study.index];
+    study.answered = false;
+    study.currentOptions = buildQuizOptions(card, study.pool, study.direction);
+    const prompt = study.direction === 'el-ru' ? card.word : card.word_translation;
+    const promptTranscription = study.direction === 'el-ru' ? card.word_transcription : '';
+    $('#quizDirectionBadge').textContent = study.direction === 'el-ru' ? 'EL → RU' : 'RU → EL';
+    $('#quizDeckBadge').textContent = card.deck_name;
+    $('#quizPrompt').textContent = prompt;
+    $('#quizPromptTranscription').textContent = promptTranscription || '';
+    $('#quizFeedback').className = 'quiz-feedback hidden';
+    $('#quizFeedback').innerHTML = '';
+    $('#quizNextButton').classList.add('hidden');
+    $('#quizAnswers').innerHTML = study.currentOptions.map((option, index) => `<button type="button" class="quiz-answer" data-option-index="${index}"><span>${index + 1}</span><strong>${escapeHtml(option.text)}</strong></button>`).join('');
+    setSessionHeader(study.index + 1, study.initialTotal, card.deck_name, study.index, study.correct);
+  }
+
+  function buildQuizOptions(card, pool, direction) {
+    const answerField = direction === 'el-ru' ? 'word_translation' : 'word';
+    const correctText = String(card[answerField] || '').trim();
+    const used = new Set([normalizeAnswer(correctText)]);
+    const distractors = [];
+    for (const candidate of shuffle([...pool])) {
+      if (candidate.id === card.id) continue;
+      const text = String(candidate[answerField] || '').trim();
+      const key = normalizeAnswer(text);
+      if (!text || used.has(key)) continue;
+      used.add(key);
+      distractors.push({ text, correct: false });
+      if (distractors.length === 3) break;
+    }
+    return shuffle([{ text: correctText, correct: true }, ...distractors]);
+  }
+
+  function handleQuizAnswerClick(event) {
+    const button = event.target.closest('[data-option-index]');
+    if (!button) return;
+    answerQuiz(Number(button.dataset.optionIndex));
+  }
+
+  function answerQuiz(optionIndex) {
+    const study = state.study;
+    if (!study || study.mode !== 'quiz' || study.answered) return;
+    const option = study.currentOptions[optionIndex];
+    if (!option) return;
+    const card = study.queue[study.index];
+    study.answered = true;
+    study.answers += 1;
+    if (option.correct) study.correct += 1;
+    else if (!study.wrongCards.some((item) => item.id === card.id)) study.wrongCards.push(card);
+
+    LexiDB.recordQuizAnswer(card.id, option.correct, study.direction);
+    if (study.affectsSrs) LexiDB.rateCard(card.id, option.correct ? 1 : 0);
+
+    $$('#quizAnswers .quiz-answer').forEach((button, index) => {
+      button.disabled = true;
+      const answer = study.currentOptions[index];
+      if (answer.correct) button.classList.add('correct');
+      else if (index === optionIndex) button.classList.add('wrong');
+      else button.classList.add('dimmed');
+    });
+    renderQuizFeedback(card, option.correct);
+    $('#sessionScore').textContent = `${study.correct} ✓`;
+    $('#quizNextButton').classList.remove('hidden');
+    if (study.autoNext) state.quizAutoTimer = setTimeout(nextQuizQuestion, 2000);
+  }
+
+  function renderQuizFeedback(card, correct) {
+    const panel = $('#quizFeedback');
+    panel.className = `quiz-feedback ${correct ? 'success' : 'error'}`;
+    let image = '<div class="feedback-image image-placeholder"><span>✦</span></div>';
+    if (card.image_blob?.length) {
+      state.quizImageUrl = bytesToObjectUrl(card.image_blob, card.image_mime);
+      image = `<img class="feedback-image" src="${state.quizImageUrl}" alt="${escapeHtml(card.word)}">`;
+    }
+    panel.innerHTML = `
+      <div class="feedback-title"><span>${correct ? '✓' : '×'}</span><strong>${correct ? 'Правильно' : 'Неправильно'}</strong></div>
+      <div class="feedback-details">${image}<div class="feedback-word"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.word_transcription || '')}</span><div class="feedback-translation">${escapeHtml(card.word_translation || '—')}</div>${card.example_el || card.example_translation ? `<div class="feedback-example">${highlightTerm(card.example_el || '—', card.word)}${card.example_transcription ? `<small>${escapeHtml(card.example_transcription)}</small>` : ''}${card.example_translation ? `<small>${escapeHtml(card.example_translation)}</small>` : ''}</div>` : ''}${card.hint ? `<div class="feedback-hint">✦ ${escapeHtml(card.hint)}</div>` : ''}</div></div>
+    `;
+  }
+
+  function nextQuizQuestion() {
+    const study = state.study;
+    if (!study || study.mode !== 'quiz' || !study.answered) return;
+    clearTimeout(state.quizAutoTimer);
+    study.index += 1;
+    renderQuizQuestion();
+  }
+
+  function setSessionHeader(current, total, deckName, completed, correct) {
+    $('#sessionCounter').textContent = `${current} / ${total}`;
+    $('#sessionDeckName').textContent = deckName;
+    $('#sessionProgress').style.width = `${Math.round((completed / total) * 100)}%`;
+    $('#sessionScore').textContent = `${correct} ✓`;
   }
 
   function finishStudyEarly() {
@@ -379,44 +574,85 @@
   function finishStudy() {
     const study = state.study;
     if (!study) return resetStudyUi();
+    clearTimeout(state.quizAutoTimer);
+    revokeQuizImage();
     const elapsed = Math.max(1, Math.round((Date.now() - study.startedAt) / 60000));
     const accuracy = study.answers ? Math.round((study.correct / study.answers) * 100) : 0;
     $('#studySession').classList.add('hidden');
+    $('#studySetup').classList.add('hidden');
     $('#studyFinished').classList.remove('hidden');
-    $('#finishSummary').textContent = `Ты завершил ${study.completed} ${plural(study.completed, 'карточку', 'карточки', 'карточек')} и обновил расписание повторений.`;
-    $('#finishStats').innerHTML = `
-      <div class="finish-stat"><strong>${study.answers}</strong><small>ответов</small></div>
-      <div class="finish-stat"><strong>${accuracy}%</strong><small>точность</small></div>
-      <div class="finish-stat"><strong>${elapsed} мин</strong><small>время</small></div>`;
+    $('#finishMistakes').classList.add('hidden');
+    $('#repeatMistakesButton').classList.add('hidden');
+
+    if (study.mode === 'quiz') {
+      state.lastQuizMistakes = [...study.wrongCards];
+      $('#finishTitle').textContent = accuracy >= 85 ? 'Отличный результат!' : accuracy >= 60 ? 'Хорошая тренировка!' : 'Ошибки уже стали полезнее';
+      $('#finishSummary').textContent = `Тест завершён: ${study.correct} правильных ответов из ${study.answers}.`;
+      $('#finishStats').innerHTML = `<div><strong>${study.correct}/${study.answers}</strong><small>правильно</small></div><div><strong>${accuracy}%</strong><small>точность</small></div><div><strong>${elapsed} мин</strong><small>время</small></div>`;
+      if (study.wrongCards.length) {
+        $('#finishMistakes').classList.remove('hidden');
+        $('#finishMistakes').innerHTML = `<strong>Слова с ошибками</strong><div class="mistake-chips">${study.wrongCards.map((card) => `<span>${escapeHtml(card.word)}</span>`).join('')}</div>`;
+        $('#repeatMistakesButton').classList.remove('hidden');
+      }
+    } else {
+      $('#finishTitle').textContent = 'Отличная работа!';
+      $('#finishSummary').textContent = `Ты завершил ${study.completed} карточек. Повторения уже сохранены в SQLite.`;
+      $('#finishStats').innerHTML = `<div><strong>${study.completed}</strong><small>завершено</small></div><div><strong>${accuracy}%</strong><small>без «Снова»</small></div><div><strong>${elapsed} мин</strong><small>время</small></div>`;
+    }
+    state.study = null;
     refreshAll();
   }
 
+  function repeatQuizMistakes() {
+    if (!state.lastQuizMistakes.length || !state.lastQuizConfig) return;
+    const config = state.lastQuizConfig;
+    setStudyMode('quiz');
+    $('#quizDirection').value = config.direction;
+    $('#quizAffectsSrs').checked = config.affectsSrs;
+    $('#quizAutoNext').checked = config.autoNext;
+    startQuiz(config.deckIds, state.lastQuizMistakes.length, state.lastQuizMistakes);
+  }
+
   function resetStudyUi() {
+    clearTimeout(state.quizAutoTimer);
     state.study = null;
+    revokeQuizImage();
+    $('#studySetup').classList.remove('hidden');
     $('#studySession').classList.add('hidden');
     $('#studyFinished').classList.add('hidden');
-    $('#studySetup').classList.remove('hidden');
     renderStudyDecks();
+    setStudyMode(state.studyMode);
   }
 
   function speakCurrentWord() {
-    const word = state.study?.queue?.[0]?.word;
-    if (!word || !('speechSynthesis' in window)) return;
+    const card = state.study?.mode === 'flashcards' ? state.study.queue[0] : null;
+    if (!card || !('speechSynthesis' in window)) return;
     speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(word);
+    const utterance = new SpeechSynthesisUtterance(card.word);
     utterance.lang = 'el-GR';
     utterance.rate = 0.82;
     speechSynthesis.speak(utterance);
   }
 
   function handleKeyboardShortcuts(event) {
-    if (state.page !== 'study' || !state.study || $('#cardDialog').open) return;
-    if (event.code === 'Space') {
-      event.preventDefault();
-      revealCard();
-    }
-    if (state.study.flipped && ['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(event.code)) {
-      rateCurrentCard(Number(event.code.slice(-1)) - 1);
+    const dialogOpen = $$('dialog[open]').length > 0;
+    const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+    if (dialogOpen || typing || !state.study) return;
+    if (state.study.mode === 'flashcards') {
+      if (event.code === 'Space') {
+        event.preventDefault();
+        revealCard();
+      }
+      if (state.study.flipped && ['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(event.code)) {
+        rateCurrentCard(Number(event.code.slice(-1)) - 1);
+      }
+    } else if (state.study.mode === 'quiz') {
+      if (!state.study.answered && ['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(event.code)) {
+        answerQuiz(Number(event.code.slice(-1)) - 1);
+      } else if (state.study.answered && ['Space', 'Enter'].includes(event.code)) {
+        event.preventDefault();
+        nextQuizQuestion();
+      }
     }
   }
 
@@ -442,14 +678,19 @@
     $('#editExampleTranscription').value = card?.example_transcription || '';
     $('#editExampleTranslation').value = card?.example_translation || '';
     $('#editHint').value = card?.hint || '';
+    $('#editImageSearchQuery').value = card?.image_search_query || '';
     state.editImageBytes = card?.image_blob || null;
     state.editImageMime = card?.image_mime || '';
     state.editImageRemoved = false;
+    state.editImageSource = card?.image_source || '';
+    state.editImageAuthor = card?.image_author || '';
+    state.editImageSourceUrl = card?.image_source_url || '';
+    state.pendingImageSource = null;
     renderEditImagePreview();
     $('#deleteCardButton').classList.toggle('hidden', !card);
     hidePasteFallback();
     $('#cardDialog').showModal();
-    setTimeout(() => $('#editWord').focus(), 50);
+    if (!isMobileLike()) setTimeout(() => $('#editWord').focus(), 60);
   }
 
   function closeCardDialog() {
@@ -472,14 +713,18 @@
       example_transcription: $('#editExampleTranscription').value.trim(),
       example_translation: $('#editExampleTranslation').value.trim(),
       hint: $('#editHint').value.trim(),
+      image_search_query: $('#editImageSearchQuery').value.trim(),
       image_blob: state.editImageRemoved ? null : state.editImageBytes,
-      image_mime: state.editImageRemoved ? '' : state.editImageMime
+      image_mime: state.editImageRemoved ? '' : state.editImageMime,
+      image_source: state.editImageRemoved ? '' : state.editImageSource,
+      image_author: state.editImageRemoved ? '' : state.editImageAuthor,
+      image_source_url: state.editImageRemoved ? '' : state.editImageSourceUrl
     };
     if (!payload.word) return toast('Поле «Слово / фраза» обязательно', 'error');
     if (id) LexiDB.updateCard(payload); else LexiDB.insertCard(payload);
     closeCardDialog();
     await refreshAll();
-    toast(id ? 'Карточка обновлена' : 'Карточка добавлена', 'success');
+    toast(id ? 'Карточка обновлена' : 'Карточка добавлена');
   }
 
   async function deleteCurrentCard() {
@@ -490,130 +735,27 @@
     LexiDB.deleteCard(id);
     closeCardDialog();
     await refreshAll();
-    toast('Карточка удалена', 'success');
+    toast('Карточка удалена');
   }
 
   async function handleImageSelection(event) {
     const file = event.target.files[0];
     if (!file) return;
+    state.pendingImageSource = { source: 'local', url: '' };
     await setEditImageFromFile(file);
-  }
-
-  async function pasteImageFromClipboard() {
-    if (!window.isSecureContext || !navigator.clipboard?.read) {
-      showPasteFallback();
-      const reason = window.isSecureContext
-        ? 'На этом устройстве прямое чтение изображений не поддерживается. Удерживай поле ниже и выбери «Вставить».'
-        : 'Прямой доступ к буферу требует HTTPS. Удерживай поле ниже и выбери «Вставить».';
-      toast(reason, 'error');
-      return;
-    }
-
-    try {
-      const clipboardItems = await navigator.clipboard.read();
-      for (const clipboardItem of clipboardItems) {
-        const imageType = clipboardItem.types.find((type) => type.startsWith('image/'));
-        if (imageType) {
-          const blob = await clipboardItem.getType(imageType);
-          const inserted = await setEditImageFromFile(new File([blob], 'clipboard-image', { type: imageType }));
-          if (inserted) {
-            hidePasteFallback();
-            toast('Изображение вставлено из буфера', 'success');
-          }
-          return;
-        }
-
-        if (clipboardItem.types.includes('text/html')) {
-          const html = await (await clipboardItem.getType('text/html')).text();
-          const pasted = await tryImageFromHtml(html);
-          if (pasted) {
-            hidePasteFallback();
-            toast('Изображение вставлено из буфера', 'success');
-            return;
-          }
-        }
-      }
-      toast('В буфере обмена нет изображения', 'error');
-    } catch (error) {
-      console.warn('Clipboard image read failed', error);
-      showPasteFallback();
-      toast('Браузер не разрешил прямой доступ. Удерживай поле ниже и выбери «Вставить».', 'error');
-    }
-  }
-
-  function showPasteFallback() {
-    const panel = $('#mobilePasteFallback');
-    const target = $('#pasteTarget');
-    panel.classList.remove('hidden');
-    target.innerHTML = '';
-    setTimeout(() => target.focus({ preventScroll: true }), 50);
-  }
-
-  function hidePasteFallback() {
-    const panel = $('#mobilePasteFallback');
-    const target = $('#pasteTarget');
-    if (!panel || !target) return;
-    panel.classList.add('hidden');
-    target.innerHTML = '';
-  }
-
-  async function handlePastedImage(event) {
-    const item = [...(event.clipboardData?.items || [])].find((entry) => entry.type.startsWith('image/'));
-    if (item) {
-      event.preventDefault();
-      const inserted = await setEditImageFromFile(item.getAsFile());
-      if (inserted) {
-        hidePasteFallback();
-        toast('Изображение вставлено из буфера', 'success');
-      }
-      return;
-    }
-
-    const html = event.clipboardData?.getData('text/html') || '';
-    if (html) {
-      const pasted = await tryImageFromHtml(html);
-      if (pasted) {
-        event.preventDefault();
-        hidePasteFallback();
-        toast('Изображение вставлено из буфера', 'success');
-      }
-    }
-  }
-
-  async function handlePasteTargetInput() {
-    const image = $('#pasteTarget').querySelector('img');
-    if (!image?.src) return;
-    const pasted = await tryImageFromSource(image.src);
-    if (pasted) {
-      hidePasteFallback();
-      toast('Изображение вставлено из буфера', 'success');
-    }
-  }
-
-  async function tryImageFromHtml(html) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const source = doc.querySelector('img')?.src;
-    return source ? tryImageFromSource(source) : false;
-  }
-
-  async function tryImageFromSource(source) {
-    if (!source || (!source.startsWith('data:image/') && !source.startsWith('blob:'))) return false;
-    try {
-      const blob = await (await fetch(source)).blob();
-      if (!blob.type.startsWith('image/')) return false;
-      return await setEditImageFromFile(new File([blob], 'clipboard-image', { type: blob.type }));
-    } catch (error) {
-      console.warn('Could not read pasted image source', error);
-      return false;
-    }
+    event.target.value = '';
   }
 
   async function setEditImageFromFile(file) {
     try {
-      const processed = await resizeImage(file, 1280, 900, 0.84);
+      const processed = await resizeImage(file, 900, 700, 0.80);
       state.editImageBytes = processed.bytes;
       state.editImageMime = processed.mime;
       state.editImageRemoved = false;
+      state.editImageSource = state.pendingImageSource?.source || 'clipboard';
+      state.editImageSourceUrl = state.pendingImageSource?.url || '';
+      state.editImageAuthor = '';
+      state.pendingImageSource = null;
       renderEditImagePreview();
       return true;
     } catch (error) {
@@ -626,6 +768,9 @@
     state.editImageBytes = null;
     state.editImageMime = '';
     state.editImageRemoved = true;
+    state.editImageSource = '';
+    state.editImageAuthor = '';
+    state.editImageSourceUrl = '';
     renderEditImagePreview();
   }
 
@@ -633,7 +778,7 @@
     clearPreviewImageUrl();
     const box = $('#editImagePreview');
     if (state.editImageBytes?.length) {
-      state.previewImageUrl = URL.createObjectURL(new Blob([state.editImageBytes], { type: state.editImageMime || 'image/jpeg' }));
+      state.previewImageUrl = bytesToObjectUrl(state.editImageBytes, state.editImageMime);
       box.innerHTML = `<img src="${state.previewImageUrl}" alt="Предпросмотр изображения">`;
     } else {
       box.innerHTML = '<div><span>✦</span><small>Изображение-якорь</small></div>';
@@ -646,28 +791,314 @@
   }
 
   function openGoogleImages() {
-    const word = $('#editWord').value.trim();
-    if (!word) return toast('Сначала введи греческое слово или фразу', 'error');
-    const query = encodeURIComponent(`${word} εικόνα`);
-    window.open(`https://www.google.com/search?tbm=isch&q=${query}`, '_blank', 'noopener,noreferrer');
+    const queryInput = $('#editImageSearchQuery');
+    const fallback = $('#editWordTranslation').value.trim() || $('#editWord').value.trim();
+    const query = queryInput.value.trim() || fallback;
+    if (!query) return toast('Сначала введи слово или поисковый запрос', 'error');
+    if (!queryInput.value.trim()) queryInput.value = query;
+    const url = googleImagesUrl(query);
+    state.pendingImageSource = { source: 'google', url };
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  async function readClipboardImage(onFile, showFallback) {
+    if (!window.isSecureContext || !navigator.clipboard?.read) {
+      showFallback();
+      toast(window.isSecureContext ? 'Используй системную вставку в поле ниже.' : 'Прямой доступ к буферу требует HTTPS.', 'error');
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const success = await onFile(new File([blob], 'clipboard-image', { type: imageType }));
+          if (success) toast('Изображение вставлено из буфера');
+          return;
+        }
+        if (item.types.includes('text/html')) {
+          const html = await (await item.getType('text/html')).text();
+          const file = await imageFileFromHtml(html);
+          if (file) {
+            const success = await onFile(file);
+            if (success) toast('Изображение вставлено из буфера');
+            return;
+          }
+        }
+      }
+      toast('В буфере обмена нет изображения', 'error');
+    } catch (error) {
+      console.warn('Clipboard read failed', error);
+      showFallback();
+      toast('Браузер не разрешил прямой доступ. Используй поле системной вставки.', 'error');
+    }
+  }
+
+  function showPasteFallback() {
+    $('#mobilePasteFallback').classList.remove('hidden');
+    $('#pasteTarget').innerHTML = '';
+  }
+
+  function hidePasteFallback() {
+    $('#mobilePasteFallback').classList.add('hidden');
+    $('#pasteTarget').innerHTML = '';
+  }
+
+  async function handlePastedImage(event) {
+    const file = fileFromClipboardEvent(event);
+    if (file) {
+      event.preventDefault();
+      const success = await setEditImageFromFile(file);
+      if (success) {
+        hidePasteFallback();
+        toast('Изображение вставлено');
+      }
+      return;
+    }
+    const html = event.clipboardData?.getData('text/html') || '';
+    if (html) {
+      const htmlFile = await imageFileFromHtml(html);
+      if (htmlFile) {
+        event.preventDefault();
+        const success = await setEditImageFromFile(htmlFile);
+        if (success) {
+          hidePasteFallback();
+          toast('Изображение вставлено');
+        }
+      }
+    }
+  }
+
+  async function handlePasteTargetInput() {
+    const file = await imageFileFromEditable($('#pasteTarget'));
+    if (!file) return;
+    const success = await setEditImageFromFile(file);
+    if (success) {
+      hidePasteFallback();
+      toast('Изображение вставлено');
+    }
+  }
+
+  function openImageLab(deckIds = []) {
+    const cards = LexiDB.getCardsWithoutImages(deckIds);
+    state.imageLab = {
+      queue: cards,
+      index: 0,
+      deckIds,
+      bytes: null,
+      mime: '',
+      source: '',
+      sourceUrl: '',
+      previewUrl: null,
+      pendingSource: null,
+      processed: 0
+    };
+    $('#imageLabDialog').showModal();
+    renderImageLab();
+  }
+
+  function closeImageLab() {
+    clearImageLabPreviewUrl();
+    $('#imageLabDialog').close();
+    $('#imageLabFile').value = '';
+    $('#imageLabPasteFallback').classList.add('hidden');
+    state.imageLab = null;
+  }
+
+  function renderImageLab() {
+    const lab = state.imageLab;
+    if (!lab || lab.index >= lab.queue.length) {
+      $('#imageLabContent').classList.add('hidden');
+      $('#imageLabEmpty').classList.remove('hidden');
+      $('#imageLabEmpty').innerHTML = `<strong>${lab?.queue.length ? 'Все карточки обработаны' : 'Нет карточек без картинок'}</strong><span>${lab?.processed ? `Сохранено изображений: ${lab.processed}.` : 'В выбранных сборниках у всех карточек уже есть визуальные якоря.'}</span>`;
+      refreshAll();
+      return;
+    }
+    $('#imageLabContent').classList.remove('hidden');
+    $('#imageLabEmpty').classList.add('hidden');
+    clearImageLabImage();
+    const card = lab.queue[lab.index];
+    $('#imageLabCounter').textContent = `${lab.index + 1} / ${lab.queue.length}`;
+    $('#imageLabProgress').style.width = `${Math.round((lab.index / lab.queue.length) * 100)}%`;
+    $('#imageLabDeck').textContent = card.deck_name;
+    $('#imageLabDeckBadge').textContent = card.deck_name;
+    $('#imageLabWord').textContent = card.word;
+    $('#imageLabTranslation').textContent = card.word_translation || 'Перевод не указан';
+    $('#imageLabQuery').value = card.image_search_query || card.word_translation || card.word;
+    $('#imageLabPasteFallback').classList.add('hidden');
+    $('#imageLabPasteTarget').innerHTML = '';
+  }
+
+  function openImageLabGoogle() {
+    const query = $('#imageLabQuery').value.trim();
+    if (!query) return toast('Введи поисковый запрос', 'error');
+    const url = googleImagesUrl(query);
+    state.imageLab.pendingSource = { source: 'google', url };
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  async function handleImageLabFile(event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    state.imageLab.pendingSource = { source: 'local', url: '' };
+    await setImageLabImageFromFile(file);
+  }
+
+  async function setImageLabImageFromFile(file) {
+    if (!state.imageLab) return false;
+    try {
+      const processed = await resizeImage(file, 900, 700, 0.80);
+      clearImageLabPreviewUrl();
+      state.imageLab.bytes = processed.bytes;
+      state.imageLab.mime = processed.mime;
+      state.imageLab.source = state.imageLab.pendingSource?.source || 'clipboard';
+      state.imageLab.sourceUrl = state.imageLab.pendingSource?.url || '';
+      state.imageLab.pendingSource = null;
+      state.imageLab.previewUrl = bytesToObjectUrl(processed.bytes, processed.mime);
+      $('#imageLabPreview').innerHTML = `<img src="${state.imageLab.previewUrl}" alt="Предпросмотр">`;
+      $('#imageLabPasteFallback').classList.add('hidden');
+      return true;
+    } catch (error) {
+      toast(error.message || 'Не удалось обработать изображение', 'error');
+      return false;
+    }
+  }
+
+  function clearImageLabImage() {
+    if (!state.imageLab) return;
+    clearImageLabPreviewUrl();
+    state.imageLab.bytes = null;
+    state.imageLab.mime = '';
+    state.imageLab.source = '';
+    state.imageLab.sourceUrl = '';
+    $('#imageLabPreview').innerHTML = '<div><span>✦</span><small>Выбери визуальный якорь</small></div>';
+  }
+
+  function clearImageLabPreviewUrl() {
+    if (state.imageLab?.previewUrl) URL.revokeObjectURL(state.imageLab.previewUrl);
+    if (state.imageLab) state.imageLab.previewUrl = null;
+  }
+
+  function showImageLabPasteFallback() {
+    $('#imageLabPasteFallback').classList.remove('hidden');
+    $('#imageLabPasteTarget').innerHTML = '';
+  }
+
+  async function handleImageLabPaste(event) {
+    const file = fileFromClipboardEvent(event);
+    if (file) {
+      event.preventDefault();
+      const success = await setImageLabImageFromFile(file);
+      if (success) toast('Изображение вставлено');
+      return;
+    }
+    const html = event.clipboardData?.getData('text/html') || '';
+    const htmlFile = html ? await imageFileFromHtml(html) : null;
+    if (htmlFile) {
+      event.preventDefault();
+      const success = await setImageLabImageFromFile(htmlFile);
+      if (success) toast('Изображение вставлено');
+    }
+  }
+
+  async function handleImageLabPasteTargetInput() {
+    const file = await imageFileFromEditable($('#imageLabPasteTarget'));
+    if (!file) return;
+    const success = await setImageLabImageFromFile(file);
+    if (success) toast('Изображение вставлено');
+  }
+
+  function skipImageLabCard() {
+    if (!state.imageLab) return;
+    state.imageLab.index += 1;
+    renderImageLab();
+  }
+
+  async function saveImageLabAndNext() {
+    const lab = state.imageLab;
+    if (!lab) return;
+    if (!lab.bytes?.length) return toast('Сначала выбери или вставь картинку', 'error');
+    const card = lab.queue[lab.index];
+    LexiDB.updateCard({
+      ...card,
+      image_search_query: $('#imageLabQuery').value.trim(),
+      image_blob: lab.bytes,
+      image_mime: lab.mime,
+      image_source: lab.source,
+      image_author: '',
+      image_source_url: lab.sourceUrl
+    });
+    lab.processed += 1;
+    lab.index += 1;
+    renderImageLab();
   }
 
   async function resizeImage(file, maxWidth, maxHeight, quality) {
     if (!file?.type?.startsWith('image/')) throw new Error('Выбранный файл не является изображением');
-    if (file.size > 20 * 1024 * 1024) throw new Error('Изображение слишком большое: максимум 20 МБ');
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, maxWidth / bitmap.width, maxHeight / bitmap.height);
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
+    if (file.size > 25 * 1024 * 1024) throw new Error('Изображение слишком большое: максимум 25 МБ');
+    const decoded = await decodeImage(file);
+    const scale = Math.min(1, maxWidth / decoded.width, maxHeight / decoded.height);
+    const width = Math.max(1, Math.round(decoded.width * scale));
+    const height = Math.max(1, Math.round(decoded.height * scale));
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const context = canvas.getContext('2d');
-    context.drawImage(bitmap, 0, 0, width, height);
-    bitmap.close?.();
+    const context = canvas.getContext('2d', { alpha: false });
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(decoded.source, 0, 0, width, height);
+    decoded.close?.();
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', quality));
     const finalBlob = blob || file;
     return { bytes: new Uint8Array(await finalBlob.arrayBuffer()), mime: finalBlob.type || file.type || 'image/jpeg' };
+  }
+
+  async function decodeImage(file) {
+    if ('createImageBitmap' in window) {
+      const bitmap = await createImageBitmap(file);
+      return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close?.() };
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      const image = await new Promise((resolve, reject) => {
+        const node = new Image();
+        node.onload = () => resolve(node);
+        node.onerror = () => reject(new Error('Не удалось прочитать изображение'));
+        node.src = url;
+      });
+      return { source: image, width: image.naturalWidth, height: image.naturalHeight, close: () => URL.revokeObjectURL(url) };
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    }
+  }
+
+  function fileFromClipboardEvent(event) {
+    const item = [...(event.clipboardData?.items || [])].find((entry) => entry.type.startsWith('image/'));
+    return item?.getAsFile() || null;
+  }
+
+  async function imageFileFromHtml(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const source = doc.querySelector('img')?.src;
+    return source ? imageFileFromSource(source) : null;
+  }
+
+  async function imageFileFromEditable(node) {
+    const source = node.querySelector('img')?.src;
+    return source ? imageFileFromSource(source) : null;
+  }
+
+  async function imageFileFromSource(source) {
+    if (!source || (!source.startsWith('data:image/') && !source.startsWith('blob:'))) return null;
+    try {
+      const blob = await (await fetch(source)).blob();
+      return blob.type.startsWith('image/') ? new File([blob], 'pasted-image', { type: blob.type }) : null;
+    } catch {
+      return null;
+    }
   }
 
   async function handleCsvFile(file) {
@@ -708,7 +1139,8 @@
       example_el: ['пример на греческом', 'greek example', 'example in greek'],
       example_transcription: ['транскрипция', 'транскрипция примера', 'example transcription'],
       example_translation: ['перевод примера', 'example translation'],
-      hint: ['подсказка / нюанс', 'подсказка/нюанс', 'подсказка', 'hint', 'note']
+      hint: ['подсказка / нюанс', 'подсказка/нюанс', 'подсказка', 'hint', 'note'],
+      image_search_query: ['поиск картинки', 'запрос для картинки', 'image search', 'image query']
     };
     const index = {};
     Object.entries(aliases).forEach(([key, values]) => {
@@ -722,7 +1154,8 @@
       example_el: getCell(row, index.example_el),
       example_transcription: getCell(row, index.example_transcription),
       example_translation: getCell(row, index.example_translation),
-      hint: getCell(row, index.hint)
+      hint: getCell(row, index.hint),
+      image_search_query: getCell(row, index.image_search_query)
     })).filter((card) => card.word);
     if (!cards.length) throw new Error('После заголовка не найдено ни одного слова');
     const missing = Object.entries(index).filter(([key, value]) => key !== 'word' && value < 0).map(([key]) => key);
@@ -734,7 +1167,7 @@
     container.classList.remove('hidden');
     const delimiterName = parsed.delimiter === '\t' ? 'TSV' : parsed.delimiter === ';' ? 'CSV с ;' : 'CSV с ,';
     const warning = parsed.missing.length ? ` · ${parsed.missing.length} необязательных колонок не найдено` : '';
-    container.innerHTML = `<div class="csv-preview-head"><span>${escapeHtml(state.csvFileName)}</span><span>${parsed.cards.length} строк · ${delimiterName}${warning}</span></div>${parsed.cards.slice(0, 5).map((card) => `<div class="csv-preview-row"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')}</span></div>`).join('')}`;
+    container.innerHTML = `<div class="csv-preview-head"><span>${escapeHtml(state.csvFileName)}</span><span>${parsed.cards.length} строк · ${delimiterName}${warning}</span><span>Предпросмотр</span></div>${parsed.cards.slice(0, 5).map((card) => `<div class="csv-preview-row"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')}</span></div>`).join('')}`;
   }
 
   async function importCsvRows() {
@@ -749,7 +1182,7 @@
     $('#csvPreview').classList.add('hidden');
     $('#importCsvButton').disabled = true;
     await refreshAll();
-    toast(`Сборник «${deckName}» импортирован`, 'success');
+    toast(`Сборник «${deckName}» импортирован`);
     showPage('decks');
   }
 
@@ -814,7 +1247,7 @@
 
   function renderDatabaseInfo() {
     const info = LexiDB.getDatabaseInfo();
-    $('#databaseInfo').innerHTML = `<div><strong>${info.decks}</strong><small>сборников</small></div><div><strong>${info.cards}</strong><small>карточек</small></div><div><strong>${formatBytes(info.bytes)}</strong><small>размер базы</small></div>`;
+    $('#databaseInfo').innerHTML = `<div><strong>${info.decks}</strong><small>сборников</small></div><div><strong>${info.cards}</strong><small>карточек</small></div><div><strong>${info.images}</strong><small>картинок</small></div><div><strong>${formatBytes(info.bytes)}</strong><small>размер</small></div>`;
   }
 
   function exportDatabase(prefix = 'lexianchor') {
@@ -827,7 +1260,7 @@
     const file = event.target.files[0];
     event.target.value = '';
     if (!file) return;
-    const ok = await confirmAction('Заменить локальную базу?', `Файл «${file.name}» заменит текущие данные на этом устройстве. Перед заменой будет скачана резервная копия.`, 'Заменить');
+    const ok = await confirmAction('Заменить локальную базу?', `Файл «${file.name}» заменит текущие данные. Перед заменой будет скачана резервная копия.`, 'Заменить');
     if (!ok) return;
     try {
       exportDatabase('lexianchor-backup');
@@ -835,7 +1268,7 @@
       state.activeDeckId = null;
       resetStudyUi();
       await refreshAll();
-      toast('SQLite-база загружена', 'success');
+      toast('SQLite-база загружена');
     } catch (error) {
       toast(`Не удалось загрузить базу: ${error.message}`, 'error');
     }
@@ -845,7 +1278,7 @@
     const node = $('#dbStatus');
     if (!node) return;
     node.lastChild.textContent = text;
-    node.style.opacity = saving ? '.7' : '1';
+    node.style.opacity = saving ? '.68' : '1';
   }
 
   async function installPwa() {
@@ -904,6 +1337,35 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function googleImagesUrl(query) {
+    return `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
+  }
+
+  function bytesToObjectUrl(bytes, mime) {
+    return URL.createObjectURL(new Blob([bytes], { type: mime || 'image/jpeg' }));
+  }
+
+  function revokeQuizImage() {
+    if (state.quizImageUrl) URL.revokeObjectURL(state.quizImageUrl);
+    state.quizImageUrl = null;
+  }
+
+  function isMobileLike() {
+    return window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768;
+  }
+
+  function shuffle(items) {
+    for (let i = items.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return items;
+  }
+
+  function normalizeAnswer(value) {
+    return String(value || '').trim().toLocaleLowerCase('el-GR').replace(/\s+/g, ' ');
+  }
+
   function highlightTerm(text, term) {
     if (!term) return escapeHtml(text);
     const pattern = new RegExp(`(${escapeRegExp(term)})`, 'giu');
@@ -949,6 +1411,6 @@
   }
 
   function emptyState(title, text) {
-    return `<div class="empty-state"><div class="empty-icon">Λ</div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(text)}</span></div>`;
+    return `<div class="empty-state"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(text)}</span></div>`;
   }
 })();
