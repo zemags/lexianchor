@@ -391,7 +391,8 @@
     }
     state.study = {
       mode: 'flashcards',
-      queue: [...cards],
+      queue: cards.map((card) => ({ ...card, _relearning: false })),
+      relearningQueue: [],
       initialTotal: cards.length,
       completed: 0,
       answers: 0,
@@ -448,9 +449,32 @@
     $('#quizSession').classList.toggle('hidden', mode !== 'quiz');
   }
 
+  function releaseDueRelearningCards(study) {
+    if (!study?.relearningQueue?.length) return;
+    const now = Date.now();
+    const ready = [];
+    const waiting = [];
+    study.relearningQueue.forEach((item) => {
+      if (new Date(item.dueAt).getTime() <= now) ready.push(item);
+      else waiting.push(item);
+    });
+    study.relearningQueue = waiting;
+    ready
+      .sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt))
+      .forEach((item) => {
+        const refreshed = LexiDB.getCard(item.cardId);
+        if (refreshed) study.queue.push({ ...refreshed, _relearning: true });
+      });
+  }
+
   function renderCurrentCard() {
     const study = state.study;
-    if (!study || study.mode !== 'flashcards' || !study.queue.length) {
+    if (!study || study.mode !== 'flashcards') {
+      finishStudy();
+      return;
+    }
+    releaseDueRelearningCards(study);
+    if (!study.queue.length) {
       finishStudy();
       return;
     }
@@ -504,16 +528,19 @@
     if (!state.study?.flipped || state.study.mode !== 'flashcards' || !state.study.queue.length) return;
     const study = state.study;
     const card = study.queue.shift();
-    LexiDB.rateCard(card.id, rating);
+    const schedule = LexiDB.rateCard(card.id, rating);
     study.answers += 1;
+
+    if (!card._relearning) study.completed += 1;
+
     if (rating === 0) {
       study.again += 1;
-      const refreshed = LexiDB.getCard(card.id);
-      study.queue.splice(Math.min(3, study.queue.length), 0, refreshed);
+      study.relearningQueue = (study.relearningQueue || []).filter((item) => item.cardId !== card.id);
+      study.relearningQueue.push({ cardId: card.id, dueAt: schedule.dueAt });
     } else {
       study.correct += 1;
-      study.completed += 1;
     }
+
     renderCurrentCard();
   }
 
@@ -650,9 +677,15 @@
         $('#repeatMistakesButton').classList.remove('hidden');
       }
     } else {
+      const pendingAgain = study.relearningQueue?.length || 0;
+      const nextDue = pendingAgain
+        ? Math.max(1, Math.ceil((Math.min(...study.relearningQueue.map((item) => new Date(item.dueAt).getTime())) - Date.now()) / 60000))
+        : 0;
       $('#finishTitle').textContent = 'Отличная работа!';
-      $('#finishSummary').textContent = `Ты завершил ${study.completed} карточек. Повторения уже сохранены в SQLite.`;
-      $('#finishStats').innerHTML = `<div><strong>${study.completed}</strong><small>завершено</small></div><div><strong>${accuracy}%</strong><small>без «Снова»</small></div><div><strong>${elapsed} мин</strong><small>время</small></div>`;
+      $('#finishSummary').textContent = pendingAgain
+        ? `Ты просмотрел ${study.completed} карточек. ${pendingAgain} ${plural(pendingAgain, 'карточка назначена', 'карточки назначены', 'карточек назначены')} повторно примерно через ${nextDue} мин.`
+        : `Ты завершил ${study.completed} карточек. Повторения уже сохранены в SQLite.`;
+      $('#finishStats').innerHTML = `<div><strong>${study.completed}</strong><small>просмотрено</small></div><div><strong>${accuracy}%</strong><small>без «Снова»</small></div><div><strong>${pendingAgain}</strong><small>ждут повтора</small></div>`;
     }
     state.study = null;
     refreshAll();

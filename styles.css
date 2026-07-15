@@ -176,3 +176,44 @@ a{color:inherit}
   .translation-info{grid-template-columns:auto minmax(0,1fr)}.translation-info em{grid-column:2}
   .translation-cache{grid-template-columns:auto minmax(0,1fr)}.translation-cache small{grid-column:2}
 }
+
+/* v1.5 — compact mobile study layout and always-visible rating controls */
+@media (max-width:720px){
+  .study-session{max-width:100%;padding-bottom:0}
+  .session-top{margin-bottom:10px;gap:10px}
+  .flashcard-stage{min-width:0}
+  .flashcard{height:clamp(330px,calc(100dvh - 250px),470px)}
+  .flashcard-face{padding:14px;border-radius:22px;overflow:hidden}
+  .card-topline{min-height:32px}
+  .card-image-box{height:clamp(115px,20dvh,160px);margin:9px 0;border-radius:16px}
+  .image-placeholder span{font-size:25px}
+  .image-placeholder small{font-size:8px}
+  .card-word{font-size:27px;line-height:1.12}
+  .transcription{font-size:11px;margin-top:3px}
+  .example-block{margin-top:10px;padding:10px;border-radius:14px}
+  .example-label,.translation-label{margin-bottom:5px}
+  .example-text{font-size:13px;line-height:1.32}
+  .example-transcription{font-size:9px;margin-top:3px}
+  .flip-hint{font-size:9px;padding-top:5px}
+  .translation-main{margin:auto 0 12px}
+  .translation-word{font-size:30px;line-height:1.15}
+  .translation-example{padding:12px;border-radius:14px;line-height:1.4;font-size:13px}
+  .hint-box{gap:8px;margin-top:9px;padding:10px;border-radius:14px}
+  .hint-box p{font-size:10px;line-height:1.35}
+  .reveal-actions,.rating-actions{position:sticky;z-index:25;bottom:calc(80px + env(safe-area-inset-bottom));margin-top:8px;padding:7px;background:rgba(246,246,250,.94);backdrop-filter:blur(12px);border-radius:17px;box-shadow:0 10px 30px rgba(25,26,43,.12)}
+  .rating-actions{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+  .rating{min-width:0;padding:8px 2px;border-radius:11px}
+  .rating strong{font-size:10px;line-height:1.1}
+  .rating small{font-size:7px;line-height:1.1;margin-top:3px;white-space:nowrap}
+  .reveal-actions .button{padding:11px}
+}
+@media (max-width:420px){
+  .flashcard{height:clamp(315px,calc(100dvh - 238px),410px)}
+  .card-image-box{height:clamp(100px,18dvh,135px)}
+  .card-word{font-size:25px}
+  .translation-word{font-size:28px}
+  .flashcard-face{padding:12px}
+  .rating-actions{gap:4px;padding:6px}
+  .rating strong{font-size:9px}
+  .rating small{font-size:6.8px}
+}
