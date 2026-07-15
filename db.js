@@ -101,6 +101,9 @@
         example_translation TEXT DEFAULT '',
         hint TEXT DEFAULT '',
         image_search_query TEXT DEFAULT '',
+        image_search_query_en TEXT DEFAULT '',
+        image_search_query_en_source TEXT DEFAULT '',
+        image_search_translation_provider TEXT DEFAULT '',
         image_blob BLOB,
         image_mime TEXT DEFAULT '',
         image_source TEXT DEFAULT '',
@@ -142,12 +145,15 @@
       CREATE INDEX IF NOT EXISTS idx_srs_due ON srs(due_at);
       CREATE INDEX IF NOT EXISTS idx_reviews_date ON reviews(review_date);
       CREATE INDEX IF NOT EXISTS idx_quiz_reviews_date ON quiz_reviews(answer_date);
-      INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
+      INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '3');
     `);
 
     // Forward-compatible additions for old app databases.
     if (!columnExists('cards', 'image_mime')) run("ALTER TABLE cards ADD COLUMN image_mime TEXT DEFAULT ''");
     if (!columnExists('cards', 'image_search_query')) run("ALTER TABLE cards ADD COLUMN image_search_query TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_search_query_en')) run("ALTER TABLE cards ADD COLUMN image_search_query_en TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_search_query_en_source')) run("ALTER TABLE cards ADD COLUMN image_search_query_en_source TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_search_translation_provider')) run("ALTER TABLE cards ADD COLUMN image_search_translation_provider TEXT DEFAULT ''");
     if (!columnExists('cards', 'image_source')) run("ALTER TABLE cards ADD COLUMN image_source TEXT DEFAULT ''");
     if (!columnExists('cards', 'image_author')) run("ALTER TABLE cards ADD COLUMN image_author TEXT DEFAULT ''");
     if (!columnExists('cards', 'image_source_url')) run("ALTER TABLE cards ADD COLUMN image_source_url TEXT DEFAULT ''");
@@ -288,9 +294,10 @@
       INSERT INTO cards(
         deck_id, word, word_transcription, word_translation, example_el,
         example_transcription, example_translation, hint, image_search_query,
+        image_search_query_en, image_search_query_en_source, image_search_translation_provider,
         image_blob, image_mime, image_source, image_author, image_source_url,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       card.deck_id,
       card.word.trim(),
@@ -301,6 +308,9 @@
       card.example_translation || '',
       card.hint || '',
       card.image_search_query || '',
+      card.image_search_query_en || '',
+      card.image_search_query_en_source || '',
+      card.image_search_translation_provider || '',
       card.image_blob || null,
       card.image_mime || '',
       card.image_source || '',
@@ -321,7 +331,8 @@
     run(`
       UPDATE cards SET deck_id = ?, word = ?, word_transcription = ?, word_translation = ?,
         example_el = ?, example_transcription = ?, example_translation = ?, hint = ?,
-        image_search_query = ?, image_blob = ?, image_mime = ?, image_source = ?,
+        image_search_query = ?, image_search_query_en = ?, image_search_query_en_source = ?,
+        image_search_translation_provider = ?, image_blob = ?, image_mime = ?, image_source = ?,
         image_author = ?, image_source_url = ?, updated_at = ?
       WHERE id = ?
     `, [
@@ -334,6 +345,9 @@
       card.example_translation || '',
       card.hint || '',
       card.image_search_query || '',
+      card.image_search_query_en || '',
+      card.image_search_query_en_source || '',
+      card.image_search_translation_provider || '',
       card.image_blob || null,
       card.image_mime || '',
       card.image_source || '',
@@ -364,9 +378,10 @@
         INSERT INTO cards(
           deck_id, word, word_transcription, word_translation, example_el,
           example_transcription, example_translation, hint, image_search_query,
+          image_search_query_en, image_search_query_en_source, image_search_translation_provider,
           image_blob, image_mime, image_source, image_author, image_source_url,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', '', '', '', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', '', '', '', ?, ?)
       `);
       const srsStmt = db.prepare('INSERT INTO srs(card_id, due_at, interval_days, ease, repetitions, lapses) VALUES (?, ?, 0, 2.5, 0, 0)');
       try {
@@ -381,6 +396,9 @@
             card.example_translation || '',
             card.hint || '',
             card.image_search_query || '',
+            card.image_search_query_en || '',
+            card.image_search_query_en_source || '',
+            card.image_search_translation_provider || '',
             timestamp,
             timestamp
           ]);

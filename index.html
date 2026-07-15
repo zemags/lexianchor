@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#11131f">
-  <meta name="description" content="LexiAnchor — локальный тренажёр греческих слов с интервальным повторением, тестами и SQLite.">
+  <meta name="description" content="LexiAnchor — локальный тренажёр греческих слов с интервальным повторением, тестами, автопереводом запросов и SQLite.">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -301,8 +301,9 @@
         </div>
         <div class="image-tools">
           <div class="image-tools-head"><div><span class="panel-kicker">ВИЗУАЛЬНЫЙ ЯКОРЬ</span><h3>Найти и привязать картинку</h3></div><span class="storage-pill">Внутри SQLite</span></div>
-          <p>Лучший результат обычно даёт короткий запрос на английском. Картинка будет уменьшена до WebP и сохранена прямо в базе.</p>
-          <label class="field image-query-field"><span>Запрос для картинки</span><input id="editImageSearchQuery" type="text" placeholder="Например: cool morning breeze"></label>
+          <p>Можно вводить запрос по-русски: перед поиском Pexels приложение автоматически попробует перевести его на английский и сохранит результат в SQLite.</p>
+          <label class="field image-query-field"><span>Запрос для картинки</span><input id="editImageSearchQuery" type="text" placeholder="Например: приятная утренняя прохлада"></label>
+          <div id="editTranslationCache" class="translation-cache hidden"></div>
           <div class="image-action-grid">
             <button type="button" id="pexelsCardButton" class="image-action pexels-action featured-action"><span>P</span><div><strong>Найти в Pexels</strong><small>Выбрать внутри приложения</small></div></button>
             <button type="button" id="googleImagesButton" class="image-action google-action"><span>G</span><div><strong>Google Картинки</strong><small>Резервный внешний поиск</small></div></button>
@@ -335,7 +336,8 @@
             <span class="deck-badge" id="imageLabDeckBadge">Сборник</span>
             <h3 id="imageLabWord">λέξη</h3>
             <p id="imageLabTranslation">перевод</p>
-            <label class="field"><span>Запрос на английском</span><input id="imageLabQuery" type="text"></label>
+            <label class="field"><span>Запрос для картинки</span><input id="imageLabQuery" type="text" placeholder="Можно по-русски"></label>
+            <div id="imageLabTranslationCache" class="translation-cache hidden"></div>
             <div class="image-action-grid compact-grid">
               <button type="button" id="imageLabPexels" class="image-action pexels-action featured-action"><span>P</span><div><strong>Найти в Pexels</strong><small>Галерея внутри приложения</small></div></button>
               <button type="button" id="imageLabGoogle" class="image-action google-action"><span>G</span><div><strong>Google</strong><small>Резервный поиск</small></div></button>
@@ -365,6 +367,22 @@
           <div class="integration-actions"><button type="button" id="testPexelsKey" class="button surface">Проверить ключ</button><button type="button" id="clearPexelsKey" class="text-button danger">Удалить ключ</button></div>
         </div>
       </section>
+      <section class="integration-card translation-integration-card">
+        <div class="integration-logo translator-logo">A→</div>
+        <div class="integration-copy">
+          <div class="integration-title"><div><strong>Автоперевод для поиска</strong><small>Русский запрос → английский → Pexels</small></div><span id="translatorBadge" class="connection-badge connected">Включено</span></div>
+          <div class="translation-cascade" aria-label="Порядок перевода">
+            <span><b>1</b> Chrome Translator на компьютере</span><i>↓</i><span><b>2</b> MyMemory API</span><i>↓</i><span><b>3</b> Русский запрос без перевода</span>
+          </div>
+          <div class="config-row compact-config-row">
+            <div><strong>Автоматически переводить русские запросы</strong><small>Перевод сохраняется внутри карточки и повторно не запрашивается</small></div>
+            <label class="switch"><input id="autoTranslateToggle" type="checkbox" checked><span></span></label>
+          </div>
+          <label class="field"><span>Email для MyMemory — необязательно</span><input id="myMemoryEmailInput" type="email" autocomplete="email" placeholder="name@example.com"></label>
+          <p class="integration-note">Email повышает бесплатный дневной лимит MyMemory. Он хранится только в localStorage этого браузера и не попадает в SQLite.</p>
+          <div class="integration-actions"><button type="button" id="testTranslationButton" class="button surface">Проверить перевод</button><span id="translatorSupportText" class="integration-status-text"></span></div>
+        </div>
+      </section>
       <div class="modal-actions settings-actions"><span></span><button type="button" id="cancelSettingsButton" class="button surface">Отмена</button><button type="submit" class="button primary">Сохранить настройки</button></div>
     </form>
   </dialog>
@@ -376,9 +394,10 @@
         <button type="button" id="closePexelsDialog" class="icon-button">×</button>
       </div>
       <div class="pexels-searchbar">
-        <div class="search-wrap"><span>⌕</span><input id="pexelsSearchInput" type="search" placeholder="Например: cool morning breeze"></div>
+        <div class="search-wrap"><span>⌕</span><input id="pexelsSearchInput" type="search" placeholder="Можно ввести запрос по-русски"></div>
         <button type="button" id="pexelsSearchButton" class="button primary">Найти</button>
       </div>
+      <div id="pexelsTranslationInfo" class="translation-info hidden"></div>
       <div class="pexels-toolbar"><span id="pexelsStatus">Введите запрос и нажмите «Найти»</span><button type="button" id="pexelsUseFirst" class="text-button hidden">Использовать первое</button></div>
       <div id="pexelsResults" class="pexels-grid"></div>
       <div id="pexelsEmpty" class="empty-state compact-empty"><strong>Поиск внутри LexiAnchor</strong><span>Нажмите на подходящую фотографию — она сразу загрузится, уменьшится до WebP и сохранится внутри SQLite.</span></div>

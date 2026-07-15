@@ -25,6 +25,9 @@
     editImageSource: '',
     editImageAuthor: '',
     editImageSourceUrl: '',
+    editImageSearchQueryEn: '',
+    editImageSearchQueryEnSource: '',
+    editImageSearchTranslationProvider: '',
     pendingImageSource: null,
     imageLab: null,
     pexels: {
@@ -33,11 +36,21 @@
       page: 1,
       totalResults: 0,
       results: [],
-      loading: false
+      loading: false,
+      originalQuery: '',
+      translationProvider: '',
+      translationFromCache: false
+    },
+    translator: {
+      instance: null,
+      promise: null,
+      downloadProgress: 0
     }
   };
 
   const PEXELS_KEY_STORAGE = 'lexianchor.pexelsApiKey';
+  const MYMEMORY_EMAIL_STORAGE = 'lexianchor.myMemoryEmail';
+  const AUTO_TRANSLATE_STORAGE = 'lexianchor.autoTranslateImageQueries';
 
   const pageMeta = {
     dashboard: ['ТВОЙ ПРОГРЕСС', 'Обзор'],
@@ -73,6 +86,8 @@
     $('#togglePexelsKey').addEventListener('click', togglePexelsKeyVisibility);
     $('#testPexelsKey').addEventListener('click', testPexelsKey);
     $('#clearPexelsKey').addEventListener('click', clearPexelsKey);
+    $('#testTranslationButton').addEventListener('click', testTranslationIntegration);
+    $('#autoTranslateToggle').addEventListener('change', updateTranslatorBadge);
     $('#newDeckButton').addEventListener('click', createDeckFlow);
     $('#newCardButton').addEventListener('click', () => openCardDialog());
     $('#imageLabAllButton').addEventListener('click', () => openImageLab([]));
@@ -110,6 +125,10 @@
     $('#closePasteFallback').addEventListener('click', hidePasteFallback);
     $('#pasteTarget').addEventListener('input', handlePasteTargetInput);
     $('#cardDialog').addEventListener('paste', handlePastedImage);
+    $('#editImageSearchQuery').addEventListener('input', clearEditTranslationCache);
+    $('#editWordTranslation').addEventListener('input', () => {
+      if (!$('#editImageSearchQuery').value.trim()) clearEditTranslationCache();
+    });
 
     $('#closeImageLab').addEventListener('click', closeImageLab);
     $('#imageLabPexels').addEventListener('click', () => openPexelsDialog('lab'));
@@ -118,6 +137,7 @@
     $('#imageLabFile').addEventListener('change', handleImageLabFile);
     $('#imageLabPasteTarget').addEventListener('input', handleImageLabPasteTargetInput);
     $('#imageLabDialog').addEventListener('paste', handleImageLabPaste);
+    $('#imageLabQuery').addEventListener('input', clearImageLabTranslationCache);
     $('#imageLabSkip').addEventListener('click', skipImageLabCard);
     $('#imageLabRemove').addEventListener('click', clearImageLabImage);
     $('#imageLabSaveNext').addEventListener('click', saveImageLabAndNext);
@@ -714,6 +734,10 @@
     $('#editExampleTranslation').value = card?.example_translation || '';
     $('#editHint').value = card?.hint || '';
     $('#editImageSearchQuery').value = card?.image_search_query || '';
+    state.editImageSearchQueryEn = card?.image_search_query_en || '';
+    state.editImageSearchQueryEnSource = card?.image_search_query_en_source || '';
+    state.editImageSearchTranslationProvider = card?.image_search_translation_provider || '';
+    renderEditTranslationCache();
     state.editImageBytes = card?.image_blob || null;
     state.editImageMime = card?.image_mime || '';
     state.editImageRemoved = false;
@@ -749,6 +773,9 @@
       example_translation: $('#editExampleTranslation').value.trim(),
       hint: $('#editHint').value.trim(),
       image_search_query: $('#editImageSearchQuery').value.trim(),
+      image_search_query_en: state.editImageSearchQueryEn || '',
+      image_search_query_en_source: state.editImageSearchQueryEnSource || '',
+      image_search_translation_provider: state.editImageSearchTranslationProvider || '',
       image_blob: state.editImageRemoved ? null : state.editImageBytes,
       image_mime: state.editImageRemoved ? '' : state.editImageMime,
       image_source: state.editImageRemoved ? '' : state.editImageSource,
@@ -864,7 +891,11 @@
     $('#pexelsApiKeyInput').value = key;
     $('#pexelsApiKeyInput').type = 'password';
     $('#togglePexelsKey').textContent = 'Показать';
+    $('#myMemoryEmailInput').value = getLocalSetting(MYMEMORY_EMAIL_STORAGE, '');
+    $('#autoTranslateToggle').checked = getAutoTranslateEnabled();
     updatePexelsKeyBadge(Boolean(key));
+    updateTranslatorBadge();
+    updateTranslatorSupportText();
     $('#settingsDialog').showModal();
   }
 
@@ -881,10 +912,14 @@
   function saveSettings(event) {
     event.preventDefault();
     const key = $('#pexelsApiKeyInput').value.trim();
+    const email = $('#myMemoryEmailInput').value.trim();
     if (!setPexelsKey(key)) return;
+    if (!setLocalSetting(MYMEMORY_EMAIL_STORAGE, email)) return;
+    if (!setLocalSetting(AUTO_TRANSLATE_STORAGE, $('#autoTranslateToggle').checked ? '1' : '0')) return;
     updatePexelsKeyBadge(Boolean(key));
+    updateTranslatorBadge();
     closeSettingsDialog();
-    toast(key ? 'Pexels API key сохранён на этом устройстве' : 'Pexels API key удалён');
+    toast('Настройки интеграций сохранены на этом устройстве');
   }
 
   function togglePexelsKeyVisibility() {
@@ -899,6 +934,228 @@
     setPexelsKey('');
     updatePexelsKeyBadge(false);
     toast('Pexels API key удалён с этого устройства');
+  }
+
+  function getLocalSetting(key, fallback = '') {
+    try {
+      const value = localStorage.getItem(key);
+      return value === null ? fallback : value;
+    } catch (error) {
+      console.warn(`Unable to read ${key}`, error);
+      return fallback;
+    }
+  }
+
+  function setLocalSetting(key, value) {
+    try {
+      if (value === '' || value === null || value === undefined) localStorage.removeItem(key);
+      else localStorage.setItem(key, String(value));
+      return true;
+    } catch (error) {
+      console.warn(`Unable to save ${key}`, error);
+      toast('Браузер не разрешил сохранить настройку локально', 'error');
+      return false;
+    }
+  }
+
+  function getAutoTranslateEnabled() {
+    const dialog = $('#settingsDialog');
+    const toggle = $('#autoTranslateToggle');
+    if (dialog?.open && toggle) return toggle.checked;
+    return getLocalSetting(AUTO_TRANSLATE_STORAGE, '1') !== '0';
+  }
+
+  function updateTranslatorBadge() {
+    const enabled = $('#autoTranslateToggle')?.checked ?? getAutoTranslateEnabled();
+    const badge = $('#translatorBadge');
+    if (!badge) return;
+    badge.textContent = enabled ? 'Включено' : 'Выключено';
+    badge.classList.toggle('connected', enabled);
+  }
+
+  function updateTranslatorSupportText(message = '') {
+    const target = $('#translatorSupportText');
+    if (!target) return;
+    if (message) {
+      target.textContent = message;
+      return;
+    }
+    target.textContent = canUseChromeTranslator()
+      ? 'На этом компьютере доступен локальный Chrome Translator.'
+      : 'Chrome Translator недоступен — будет использован MyMemory.';
+  }
+
+  function canUseChromeTranslator() {
+    return !isMobileLike() && 'Translator' in self && typeof self.Translator?.create === 'function';
+  }
+
+  function containsCyrillic(text) {
+    return /[\u0400-\u052f]/u.test(text || '');
+  }
+
+  function normalizeTranslatedQuery(value) {
+    return String(value || '')
+      .replace(/^\s*["“”«»]+|["“”«»]+\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  async function getChromeTranslator(onProgress = null) {
+    if (!canUseChromeTranslator()) throw new Error('Chrome Translator недоступен');
+    if (state.translator.instance) return state.translator.instance;
+    if (!state.translator.promise) {
+      state.translator.promise = self.Translator.create({
+        sourceLanguage: 'ru',
+        targetLanguage: 'en',
+        monitor(monitor) {
+          monitor.addEventListener('downloadprogress', (event) => {
+            state.translator.downloadProgress = Math.round(Number(event.loaded || 0) * 100);
+            onProgress?.(state.translator.downloadProgress);
+          });
+        }
+      }).then((translator) => {
+        state.translator.instance = translator;
+        return translator;
+      }).catch((error) => {
+        state.translator.promise = null;
+        throw error;
+      });
+    }
+    return state.translator.promise;
+  }
+
+  async function translateWithChrome(text, onProgress = null) {
+    const translator = await getChromeTranslator(onProgress);
+    const translated = normalizeTranslatedQuery(await translator.translate(text));
+    if (!translated || translated.toLowerCase() === text.trim().toLowerCase()) {
+      throw new Error('Chrome Translator не вернул английский перевод');
+    }
+    return translated;
+  }
+
+  function decodeHtmlEntities(value) {
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = String(value || '');
+    return textarea.value;
+  }
+
+  async function translateWithMyMemory(text) {
+    const params = new URLSearchParams({
+      q: text.slice(0, 220),
+      langpair: 'ru|en',
+      mt: '1'
+    });
+    const settingsEmail = $('#settingsDialog')?.open ? $('#myMemoryEmailInput')?.value : '';
+    const email = String(settingsEmail || getLocalSetting(MYMEMORY_EMAIL_STORAGE, '')).trim();
+    if (email) params.set('de', email);
+    const response = await fetch(`https://api.mymemory.translated.net/get?${params}`, {
+      method: 'GET',
+      mode: 'cors',
+      credentials: 'omit',
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) throw new Error(`MyMemory: HTTP ${response.status}`);
+    const data = await response.json();
+    const translated = normalizeTranslatedQuery(decodeHtmlEntities(data?.responseData?.translatedText));
+    const status = Number(data?.responseStatus || 200);
+    if (status >= 400 || !translated || /MYMEMORY WARNING/i.test(translated)) {
+      throw new Error(data?.responseDetails || 'MyMemory не вернул перевод');
+    }
+    return translated;
+  }
+
+  async function resolveEnglishImageQuery(sourceQuery, cached = {}, onStatus = null) {
+    const source = String(sourceQuery || '').trim();
+    if (!source) return { query: '', sourceQuery: '', provider: 'empty', fromCache: false };
+    if (!containsCyrillic(source) || !getAutoTranslateEnabled()) {
+      return { query: source, sourceQuery: source, provider: containsCyrillic(source) ? 'fallback' : 'original', fromCache: false };
+    }
+    if (cached.english && cached.source === source) {
+      onStatus?.(`Сохранённый перевод: ${cached.english}`);
+      return { query: cached.english, sourceQuery: source, provider: cached.provider || 'cache', fromCache: true };
+    }
+    if (canUseChromeTranslator()) {
+      try {
+        onStatus?.('Перевожу на устройстве через Chrome Translator…');
+        const query = await translateWithChrome(source, (progress) => onStatus?.(`Загружаю языковую модель Chrome: ${progress}%`));
+        return { query, sourceQuery: source, provider: 'chrome', fromCache: false };
+      } catch (error) {
+        console.warn('Chrome Translator fallback', error);
+      }
+    }
+    try {
+      onStatus?.('Chrome Translator недоступен. Перевожу через MyMemory…');
+      const query = await translateWithMyMemory(source);
+      return { query, sourceQuery: source, provider: 'mymemory', fromCache: false };
+    } catch (error) {
+      console.warn('MyMemory fallback', error);
+      onStatus?.('Перевод недоступен — выполняю поиск по-русски.');
+      return { query: source, sourceQuery: source, provider: 'fallback', fromCache: false };
+    }
+  }
+
+  function providerLabel(provider) {
+    return ({
+      chrome: 'Chrome Translator',
+      mymemory: 'MyMemory',
+      cache: 'сохранённый перевод',
+      fallback: 'русский запрос',
+      original: 'исходный запрос'
+    })[provider] || provider || 'перевод';
+  }
+
+  async function testTranslationIntegration() {
+    const button = $('#testTranslationButton');
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Проверяю…';
+    try {
+      const result = await resolveEnglishImageQuery('приятная утренняя прохлада', {}, updateTranslatorSupportText);
+      updateTranslatorSupportText(`${providerLabel(result.provider)}: ${result.query}`);
+      toast(`Тестовый перевод: ${result.query}`);
+    } catch (error) {
+      updateTranslatorSupportText('Не удалось проверить перевод');
+      toast(error.message || 'Ошибка перевода', 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  function clearEditTranslationCache() {
+    state.editImageSearchQueryEn = '';
+    state.editImageSearchQueryEnSource = '';
+    state.editImageSearchTranslationProvider = '';
+    renderEditTranslationCache();
+  }
+
+  function renderEditTranslationCache() {
+    const target = $('#editTranslationCache');
+    if (!target) return;
+    const visible = Boolean(state.editImageSearchQueryEn && state.editImageSearchQueryEnSource);
+    target.classList.toggle('hidden', !visible);
+    target.innerHTML = visible
+      ? `<span>EN</span><strong>${escapeHtml(state.editImageSearchQueryEn)}</strong><small>${escapeHtml(providerLabel(state.editImageSearchTranslationProvider))}</small>`
+      : '';
+  }
+
+  function clearImageLabTranslationCache() {
+    if (!state.imageLab) return;
+    state.imageLab.queryEn = '';
+    state.imageLab.queryEnSource = '';
+    state.imageLab.translationProvider = '';
+    renderImageLabTranslationCache();
+  }
+
+  function renderImageLabTranslationCache() {
+    const target = $('#imageLabTranslationCache');
+    const lab = state.imageLab;
+    if (!target || !lab) return;
+    const visible = Boolean(lab.queryEn && lab.queryEnSource);
+    target.classList.toggle('hidden', !visible);
+    target.innerHTML = visible
+      ? `<span>EN</span><strong>${escapeHtml(lab.queryEn)}</strong><small>${escapeHtml(providerLabel(lab.translationProvider))}</small>`
+      : '';
   }
 
   async function testPexelsKey() {
@@ -932,19 +1189,86 @@
     state.pexels.results = [];
     state.pexels.page = 1;
     state.pexels.totalResults = 0;
-    const query = context === 'lab'
+    state.pexels.translationProvider = '';
+    state.pexels.translationFromCache = false;
+    const sourceQuery = context === 'lab'
       ? $('#imageLabQuery').value.trim()
       : $('#editImageSearchQuery').value.trim() || $('#editWordTranslation').value.trim() || $('#editWord').value.trim();
+    const cached = getCurrentImageTranslationCache(context);
+    const query = cached.english && cached.source === sourceQuery ? cached.english : sourceQuery;
+    state.pexels.originalQuery = sourceQuery;
     state.pexels.query = query;
     $('#pexelsSearchInput').value = query;
     $('#pexelsResults').innerHTML = '';
     $('#pexelsEmpty').classList.remove('hidden');
     $('#pexelsLoadMore').classList.add('hidden');
     $('#pexelsUseFirst').classList.add('hidden');
-    $('#pexelsStatus').textContent = query ? 'Нажмите «Найти», чтобы увидеть варианты' : 'Введите поисковый запрос';
+    renderPexelsTranslationInfo(cached.english && cached.source === sourceQuery
+      ? { query: cached.english, sourceQuery, provider: cached.provider || 'cache', fromCache: true }
+      : null);
+    $('#pexelsStatus').textContent = query ? 'Подготавливаю запрос…' : 'Введите поисковый запрос';
     $('#pexelsDialog').showModal();
     if (query) searchPexels(true);
     else if (!isMobileLike()) setTimeout(() => $('#pexelsSearchInput').focus(), 60);
+  }
+
+  function getCurrentImageTranslationCache(context = state.pexels.context) {
+    if (context === 'lab') {
+      return {
+        english: state.imageLab?.queryEn || '',
+        source: state.imageLab?.queryEnSource || '',
+        provider: state.imageLab?.translationProvider || ''
+      };
+    }
+    return {
+      english: state.editImageSearchQueryEn || '',
+      source: state.editImageSearchQueryEnSource || '',
+      provider: state.editImageSearchTranslationProvider || ''
+    };
+  }
+
+  function storeCurrentImageTranslation(result, context = state.pexels.context) {
+    if (!result?.sourceQuery) return;
+    if (!containsCyrillic(result.sourceQuery)) {
+      if (context === 'lab' && state.imageLab) {
+        state.imageLab.queryEn = '';
+        state.imageLab.queryEnSource = '';
+        state.imageLab.translationProvider = '';
+        renderImageLabTranslationCache();
+      } else {
+        clearEditTranslationCache();
+      }
+      return;
+    }
+    const english = result.provider === 'fallback' ? '' : result.query;
+    if (context === 'lab' && state.imageLab) {
+      state.imageLab.queryEn = english;
+      state.imageLab.queryEnSource = result.sourceQuery;
+      state.imageLab.translationProvider = result.provider;
+      renderImageLabTranslationCache();
+    } else {
+      state.editImageSearchQueryEn = english;
+      state.editImageSearchQueryEnSource = result.sourceQuery;
+      state.editImageSearchTranslationProvider = result.provider;
+      renderEditTranslationCache();
+    }
+  }
+
+  function renderPexelsTranslationInfo(result = null, message = '') {
+    const target = $('#pexelsTranslationInfo');
+    if (!target) return;
+    if (message) {
+      target.classList.remove('hidden');
+      target.innerHTML = `<span class="translation-spinner"></span><strong>${escapeHtml(message)}</strong>`;
+      return;
+    }
+    if (!result || !result.sourceQuery || result.query === result.sourceQuery) {
+      target.classList.add('hidden');
+      target.innerHTML = '';
+      return;
+    }
+    target.classList.remove('hidden');
+    target.innerHTML = `<span>RU → EN</span><div><small>${escapeHtml(result.sourceQuery)}</small><strong>${escapeHtml(result.query)}</strong></div><em>${escapeHtml(providerLabel(result.fromCache ? 'cache' : result.provider))}</em>`;
   }
 
   function closePexelsDialog() {
@@ -973,17 +1297,34 @@
 
   async function searchPexels(reset = true) {
     if (state.pexels.loading) return;
-    const query = $('#pexelsSearchInput').value.trim();
-    if (!query) return toast('Введите запрос для поиска картинки', 'error');
+    const enteredQuery = $('#pexelsSearchInput').value.trim();
+    if (!enteredQuery) return toast('Введите запрос для поиска картинки', 'error');
     state.pexels.loading = true;
     const button = $('#pexelsSearchButton');
     const original = button.textContent;
     button.disabled = true;
-    button.textContent = 'Ищу…';
+    button.textContent = reset ? 'Перевожу…' : 'Ищу…';
     try {
+      let query = state.pexels.query;
+      if (reset) {
+        const cached = getCurrentImageTranslationCache();
+        const sourceQuery = enteredQuery === cached.english && cached.source ? cached.source : enteredQuery;
+        const result = await resolveEnglishImageQuery(sourceQuery, cached, (message) => {
+          $('#pexelsStatus').textContent = message;
+          renderPexelsTranslationInfo(null, message);
+        });
+        query = result.query;
+        state.pexels.originalQuery = result.sourceQuery;
+        state.pexels.translationProvider = result.provider;
+        state.pexels.translationFromCache = result.fromCache;
+        state.pexels.query = query;
+        $('#pexelsSearchInput').value = query;
+        storeCurrentImageTranslation(result);
+        renderPexelsTranslationInfo(result);
+        button.textContent = 'Ищу…';
+      }
       const page = reset ? 1 : state.pexels.page + 1;
       const data = await requestPexels(query, page, 12);
-      state.pexels.query = query;
       state.pexels.page = page;
       state.pexels.totalResults = Number(data.total_results || 0);
       state.pexels.results = reset ? (data.photos || []) : [...state.pexels.results, ...(data.photos || [])];
@@ -1045,11 +1386,11 @@
         if (!state.imageLab) throw new Error('Лаборатория картинок уже закрыта');
         state.imageLab.pendingSource = metadata;
         success = await setImageLabImageFromFile(file);
-        $('#imageLabQuery').value = state.pexels.query;
+        $('#imageLabQuery').value = state.pexels.originalQuery || state.pexels.query;
       } else {
         state.pendingImageSource = metadata;
         success = await setEditImageFromFile(file);
-        $('#editImageSearchQuery').value = state.pexels.query;
+        $('#editImageSearchQuery').value = state.pexels.originalQuery || state.pexels.query;
       }
       if (success) {
         closePexelsDialog();
@@ -1109,14 +1450,23 @@
       for (let i = lab.index; i < end; i += 1) {
         if (lab.autoCancel) break;
         const card = lab.queue[i];
-        const query = (card.image_search_query || card.word_translation || card.word || '').trim();
+        const sourceQuery = (card.image_search_query || card.word_translation || card.word || '').trim();
         lab.index = i;
         $('#imageLabCounter').textContent = `${i + 1} / ${lab.queue.length}`;
         $('#imageLabProgress').style.width = `${Math.round((i / lab.queue.length) * 100)}%`;
         $('#imageLabWord').textContent = card.word;
-        $('#imageLabTranslation').textContent = `Ищу: ${query}`;
+        $('#imageLabTranslation').textContent = `Подготавливаю: ${sourceQuery}`;
         try {
-          if (!query) throw new Error('Пустой запрос');
+          if (!sourceQuery) throw new Error('Пустой запрос');
+          const resolved = await resolveEnglishImageQuery(sourceQuery, {
+            english: card.image_search_query_en || '',
+            source: card.image_search_query_en_source || '',
+            provider: card.image_search_translation_provider || ''
+          }, (message) => {
+            $('#imageLabTranslation').textContent = message;
+          });
+          const query = resolved.query;
+          $('#imageLabTranslation').textContent = `Ищу: ${query}`;
           const data = await requestPexels(query, 1, 1);
           const photo = data.photos?.[0];
           if (!photo) throw new Error('Нет результатов');
@@ -1124,7 +1474,10 @@
           const processed = await resizeImage(file, 900, 700, 0.80);
           LexiDB.updateCard({
             ...card,
-            image_search_query: query,
+            image_search_query: sourceQuery,
+            image_search_query_en: resolved.provider === 'fallback' ? '' : resolved.query,
+            image_search_query_en_source: resolved.sourceQuery,
+            image_search_translation_provider: resolved.provider,
             image_blob: processed.bytes,
             image_mime: processed.mime,
             image_source: 'pexels',
@@ -1242,6 +1595,9 @@
       author: '',
       previewUrl: null,
       pendingSource: null,
+      queryEn: '',
+      queryEnSource: '',
+      translationProvider: '',
       processed: 0,
       autoRunning: false,
       autoCancel: false
@@ -1283,6 +1639,10 @@
     $('#imageLabWord').textContent = card.word;
     $('#imageLabTranslation').textContent = card.word_translation || 'Перевод не указан';
     $('#imageLabQuery').value = card.image_search_query || card.word_translation || card.word;
+    lab.queryEn = card.image_search_query_en || '';
+    lab.queryEnSource = card.image_search_query_en_source || '';
+    lab.translationProvider = card.image_search_translation_provider || '';
+    renderImageLabTranslationCache();
     $('#imageLabPasteFallback').classList.add('hidden');
     $('#imageLabPasteTarget').innerHTML = '';
   }
@@ -1385,6 +1745,9 @@
     LexiDB.updateCard({
       ...card,
       image_search_query: $('#imageLabQuery').value.trim(),
+      image_search_query_en: lab.queryEn || '',
+      image_search_query_en_source: lab.queryEnSource || '',
+      image_search_translation_provider: lab.translationProvider || '',
       image_blob: lab.bytes,
       image_mime: lab.mime,
       image_source: lab.source,
