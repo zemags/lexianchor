@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lexianchor-v1.5.0';
+const CACHE_NAME = 'lexianchor-v1.7.0';
 const REMOTE_ASSETS = [
   'https://cdn.jsdelivr.net/npm/sql.js@1.14.1/dist/sql-wasm.js',
   'https://cdn.jsdelivr.net/npm/sql.js@1.14.1/dist/sql-wasm.wasm'

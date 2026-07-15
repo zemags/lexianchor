@@ -15,7 +15,13 @@
     study: null,
     lastQuizMistakes: [],
     lastQuizConfig: null,
+    lastSwipeMistakes: [],
+    lastSwipeConfig: null,
+    lastMistakeMode: 'quiz',
     quizImageUrl: null,
+    swipeImageUrl: null,
+    swipeFeedbackTimer: null,
+    swipeGesture: null,
     quizAutoTimer: null,
     cardImageUrl: null,
     previewImageUrl: null,
@@ -103,9 +109,15 @@
     $('#flashcard').addEventListener('click', revealCard);
     $('#exitStudyButton').addEventListener('click', finishStudyEarly);
     $('#restartStudyButton').addEventListener('click', resetStudyUi);
-    $('#repeatMistakesButton').addEventListener('click', repeatQuizMistakes);
+    $('#repeatMistakesButton').addEventListener('click', repeatMistakes);
     $('#quizNextButton').addEventListener('click', nextQuizQuestion);
     $('#quizAnswers').addEventListener('click', handleQuizAnswerClick);
+    $('#swipeLeftButton').addEventListener('click', () => answerSwipe(false));
+    $('#swipeRightButton').addEventListener('click', () => answerSwipe(true));
+    $('#swipeCard').addEventListener('pointerdown', handleSwipePointerDown);
+    $('#swipeCard').addEventListener('pointermove', handleSwipePointerMove);
+    $('#swipeCard').addEventListener('pointerup', handleSwipePointerUp);
+    $('#swipeCard').addEventListener('pointercancel', handleSwipePointerCancel);
     $('#speakButton').addEventListener('click', (event) => {
       event.stopPropagation();
       speakCurrentWord();
@@ -337,11 +349,13 @@
   }
 
   function setStudyMode(mode) {
-    state.studyMode = mode === 'quiz' ? 'quiz' : 'flashcards';
+    state.studyMode = ['flashcards', 'quiz', 'swipe'].includes(mode) ? mode : 'flashcards';
     $$('.mode-option').forEach((button) => button.classList.toggle('active', button.dataset.studyMode === state.studyMode));
     $('#flashcardOptions').classList.toggle('hidden', state.studyMode !== 'flashcards');
     $('#quizOptions').classList.toggle('hidden', state.studyMode !== 'quiz');
-    $('#startStudyButton').textContent = state.studyMode === 'quiz' ? 'Начать тест' : 'Начать тренировку';
+    $('#swipeOptions').classList.toggle('hidden', state.studyMode !== 'swipe');
+    const labels = { flashcards: 'Начать тренировку', quiz: 'Начать тест', swipe: 'Начать свайп-тренировку' };
+    $('#startStudyButton').textContent = labels[state.studyMode];
   }
 
   function renderStudyDecks(preselected = null) {
@@ -379,6 +393,7 @@
     const limit = Math.max(1, Math.min(Number($('#studyLimit').value || 30), 500));
     if (!deckIds.length) return toast('Выбери хотя бы один сборник', 'error');
     if (state.studyMode === 'quiz') startQuiz(deckIds, limit);
+    else if (state.studyMode === 'swipe') startSwipeStudy(deckIds, limit);
     else startFlashcardStudy(deckIds, limit);
   }
 
@@ -441,12 +456,55 @@
     renderQuizQuestion();
   }
 
+  function buildSwipeTruthPlan(count) {
+    const matches = Math.ceil(count / 2);
+    return shuffle(Array.from({ length: count }, (_, index) => index < matches));
+  }
+
+  function startSwipeStudy(deckIds, limit, forcedCards = null) {
+    const direction = $('#swipeDirection').value;
+    const affectsSrs = $('#swipeAffectsSrs').checked;
+    const allSelectedCards = deckIds.flatMap((id) => LexiDB.getCards(id));
+    const answerField = direction === 'el-ru' ? 'word_translation' : 'word';
+    const promptField = direction === 'el-ru' ? 'word' : 'word_translation';
+    const validPool = allSelectedCards.filter((card) => String(card[answerField] || '').trim() && String(card[promptField] || '').trim());
+    const uniqueAnswers = new Set(validPool.map((card) => normalizeAnswer(card[answerField])));
+    if (uniqueAnswers.size < 2) {
+      toast('Для свайп-тренировки нужны минимум 2 карточки с разными переводами.', 'error');
+      return;
+    }
+    const questions = forcedCards
+      ? forcedCards.filter((card) => validPool.some((item) => item.id === card.id))
+      : shuffle([...validPool]).slice(0, limit);
+    if (!questions.length) return toast('Нет подходящих карточек для свайп-тренировки', 'error');
+    state.study = {
+      mode: 'swipe',
+      queue: questions,
+      pool: validPool,
+      truthPlan: buildSwipeTruthPlan(questions.length),
+      index: 0,
+      initialTotal: questions.length,
+      answers: 0,
+      correct: 0,
+      wrongCards: [],
+      startedAt: Date.now(),
+      direction,
+      affectsSrs,
+      currentPair: null,
+      transitioning: false
+    };
+    state.lastSwipeConfig = { deckIds: [...deckIds], direction, affectsSrs };
+    openStudySession('swipe');
+    renderSwipeQuestion();
+  }
+
   function openStudySession(mode) {
     $('#studySetup').classList.add('hidden');
     $('#studyFinished').classList.add('hidden');
     $('#studySession').classList.remove('hidden');
     $('#flashcardSession').classList.toggle('hidden', mode !== 'flashcards');
     $('#quizSession').classList.toggle('hidden', mode !== 'quiz');
+    $('#swipeSession').classList.toggle('hidden', mode !== 'swipe');
   }
 
   function releaseDueRelearningCards(study) {
@@ -551,7 +609,9 @@
       return;
     }
     clearTimeout(state.quizAutoTimer);
+    clearTimeout(state.swipeFeedbackTimer);
     revokeQuizImage();
+    revokeSwipeImage();
     const card = study.queue[study.index];
     study.answered = false;
     study.currentOptions = buildQuizOptions(card, study.pool, study.direction);
@@ -640,6 +700,198 @@
     renderQuizQuestion();
   }
 
+  function buildSwipePair(card, pool, direction, requestedMatch) {
+    const answerField = direction === 'el-ru' ? 'word_translation' : 'word';
+    const correctAnswer = String(card[answerField] || '').trim();
+    let isMatch = Boolean(requestedMatch);
+    let candidateCard = card;
+    if (!isMatch) {
+      const candidates = pool.filter((candidate) => candidate.id !== card.id && normalizeAnswer(candidate[answerField]) !== normalizeAnswer(correctAnswer));
+      if (candidates.length) candidateCard = candidates[Math.floor(Math.random() * candidates.length)];
+      else isMatch = true;
+    }
+    return {
+      card,
+      candidateCard,
+      isMatch,
+      promptText: direction === 'el-ru' ? String(card.word || '').trim() : String(card.word_translation || '').trim(),
+      correctAnswer,
+      shownAnswer: String(candidateCard[answerField] || '').trim()
+    };
+  }
+
+  function renderSwipeQuestion() {
+    const study = state.study;
+    if (!study || study.mode !== 'swipe' || study.index >= study.queue.length) {
+      finishStudy();
+      return;
+    }
+    clearTimeout(state.swipeFeedbackTimer);
+    revokeSwipeImage();
+    state.swipeGesture = null;
+    const card = study.queue[study.index];
+    const pair = buildSwipePair(card, study.pool, study.direction, study.truthPlan[study.index]);
+    study.currentPair = pair;
+    study.transitioning = false;
+
+    const sourceGreek = study.direction === 'el-ru';
+    $('#swipeDirectionBadge').textContent = sourceGreek ? 'EL → RU' : 'RU → EL';
+    $('#swipeDeckBadge').textContent = card.deck_name;
+    $('#swipePromptLabel').textContent = sourceGreek ? 'ГРЕЧЕСКОЕ СЛОВО / ФРАЗА' : 'РУССКОЕ СЛОВО / ФРАЗА';
+    $('#swipePrompt').textContent = sourceGreek ? card.word : card.word_translation;
+    $('#swipePromptTranscription').textContent = sourceGreek ? (card.word_transcription || '') : '';
+    $('#swipeCandidate').textContent = pair.shownAnswer;
+    $('#swipeCandidateTranscription').textContent = sourceGreek ? '' : (pair.candidateCard.word_transcription || '');
+    $('#swipeFeedback').className = 'swipe-feedback hidden';
+    $('#swipeFeedback').innerHTML = '';
+    $('#swipeRoundInfo').innerHTML = '<strong>Сравни пару</strong><small>← неверно · верно →</small>';
+    resetSwipeCardPosition();
+    renderSwipeImage(card);
+    setSessionHeader(study.index + 1, study.initialTotal, card.deck_name, study.index, study.correct);
+  }
+
+  function renderSwipeImage(card) {
+    revokeSwipeImage();
+    const box = $('#swipeImageBox');
+    if (card.image_blob?.length) {
+      state.swipeImageUrl = bytesToObjectUrl(card.image_blob, card.image_mime);
+      box.innerHTML = `<img src="${state.swipeImageUrl}" alt="Визуальный якорь для ${escapeHtml(card.word)}">`;
+      box.classList.remove('empty');
+    } else {
+      box.innerHTML = '<div><span>✦</span><small>Сравни слово и перевод</small></div>';
+      box.classList.add('empty');
+    }
+  }
+
+  function revokeSwipeImage() {
+    if (state.swipeImageUrl) URL.revokeObjectURL(state.swipeImageUrl);
+    state.swipeImageUrl = null;
+  }
+
+  function handleSwipePointerDown(event) {
+    const study = state.study;
+    if (!study || study.mode !== 'swipe' || study.transitioning || event.button !== 0) return;
+    state.swipeGesture = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      deltaX: 0,
+      deltaY: 0,
+      horizontal: false
+    };
+    const card = $('#swipeCard');
+    card.classList.add('dragging');
+    try { card.setPointerCapture(event.pointerId); } catch (_) { /* no-op */ }
+  }
+
+  function handleSwipePointerMove(event) {
+    const gesture = state.swipeGesture;
+    const study = state.study;
+    if (!gesture || gesture.pointerId !== event.pointerId || !study || study.mode !== 'swipe' || study.transitioning) return;
+    gesture.deltaX = event.clientX - gesture.startX;
+    gesture.deltaY = event.clientY - gesture.startY;
+    if (!gesture.horizontal) {
+      if (Math.abs(gesture.deltaY) > Math.abs(gesture.deltaX) && Math.abs(gesture.deltaY) > 10) return;
+      if (Math.abs(gesture.deltaX) > 7) gesture.horizontal = true;
+    }
+    if (!gesture.horizontal) return;
+    event.preventDefault();
+    const rotation = Math.max(-15, Math.min(15, gesture.deltaX / 18));
+    $('#swipeCard').style.transform = `translate3d(${gesture.deltaX}px, ${Math.min(18, Math.abs(gesture.deltaX) * 0.035)}px, 0) rotate(${rotation}deg)`;
+    updateSwipeStamps(gesture.deltaX);
+  }
+
+  function handleSwipePointerUp(event) {
+    const gesture = state.swipeGesture;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const threshold = Math.min(105, Math.max(72, $('#swipeCard').offsetWidth * 0.22));
+    state.swipeGesture = null;
+    if (gesture.horizontal && Math.abs(gesture.deltaX) >= threshold) answerSwipe(gesture.deltaX > 0);
+    else resetSwipeCardPosition();
+  }
+
+  function handleSwipePointerCancel() {
+    state.swipeGesture = null;
+    resetSwipeCardPosition();
+  }
+
+  function updateSwipeStamps(deltaX) {
+    const strength = Math.min(1, Math.abs(deltaX) / 110);
+    $('.swipe-stamp-right').style.opacity = deltaX > 0 ? strength : 0;
+    $('.swipe-stamp-left').style.opacity = deltaX < 0 ? strength : 0;
+  }
+
+  function resetSwipeCardPosition() {
+    const card = $('#swipeCard');
+    card.classList.remove('dragging', 'swipe-out-left', 'swipe-out-right');
+    card.style.transform = '';
+    $('.swipe-stamp-right').style.opacity = 0;
+    $('.swipe-stamp-left').style.opacity = 0;
+  }
+
+  function answerSwipe(userSaysMatch) {
+    const study = state.study;
+    if (!study || study.mode !== 'swipe' || study.transitioning || !study.currentPair) return;
+    const pair = study.currentPair;
+    const judgmentCorrect = userSaysMatch === pair.isMatch;
+    study.transitioning = true;
+    study.answers += 1;
+    if (judgmentCorrect) study.correct += 1;
+    else if (!study.wrongCards.some((item) => item.id === pair.card.id)) study.wrongCards.push(pair.card);
+
+    LexiDB.recordQuizAnswer(pair.card.id, judgmentCorrect, `swipe-${study.direction}`);
+    if (study.affectsSrs) LexiDB.rateCard(pair.card.id, judgmentCorrect ? 1 : 0);
+
+    const cardNode = $('#swipeCard');
+    cardNode.classList.remove('dragging');
+    cardNode.classList.add(userSaysMatch ? 'swipe-out-right' : 'swipe-out-left');
+    updateSwipeStamps(userSaysMatch ? 130 : -130);
+    emitSwipeParticles(userSaysMatch ? 'right' : 'left');
+    showSwipeFeedback(pair, judgmentCorrect, userSaysMatch);
+    $('#sessionScore').textContent = `${study.correct} ✓`;
+
+    const delay = judgmentCorrect ? 900 : 1750;
+    state.swipeFeedbackTimer = setTimeout(() => {
+      if (!state.study || state.study !== study || study.mode !== 'swipe') return;
+      study.index += 1;
+      renderSwipeQuestion();
+    }, delay);
+  }
+
+  function showSwipeFeedback(pair, judgmentCorrect, userSaysMatch) {
+    const node = $('#swipeFeedback');
+    node.className = `swipe-feedback ${judgmentCorrect ? 'success' : 'error'}`;
+    if (judgmentCorrect) {
+      node.innerHTML = `<strong>${userSaysMatch ? '✓ Пара совпадает' : '✓ Ты заметил подмену'}</strong><small>${escapeHtml(pair.promptText)} — ${escapeHtml(pair.correctAnswer)}</small>`;
+    } else if (pair.isMatch) {
+      node.innerHTML = `<strong>✕ Это был правильный перевод</strong><small>${escapeHtml(pair.promptText)} — ${escapeHtml(pair.correctAnswer)}</small>`;
+    } else {
+      node.innerHTML = `<strong>✕ Перевод был подменён</strong><small>Правильно: ${escapeHtml(pair.correctAnswer)}</small>`;
+    }
+    $('#swipeRoundInfo').innerHTML = judgmentCorrect
+      ? '<strong>Отлично!</strong><small>Следующая пара…</small>'
+      : `<strong>Запомни:</strong><small>${escapeHtml(pair.correctAnswer)}</small>`;
+  }
+
+  function emitSwipeParticles(direction) {
+    const container = $('#swipeParticles');
+    container.innerHTML = '';
+    const isRight = direction === 'right';
+    const count = 9 + Math.floor(Math.random() * 5);
+    for (let index = 0; index < count; index += 1) {
+      const particle = document.createElement('span');
+      particle.className = `swipe-particle ${isRight ? 'right' : 'left'}`;
+      particle.textContent = isRight ? '✓' : '×';
+      particle.style.setProperty('--particle-y', `${8 + Math.random() * 78}%`);
+      particle.style.setProperty('--particle-x', `${(isRight ? 1 : -1) * (20 + Math.random() * 150)}px`);
+      particle.style.setProperty('--particle-r', `${-45 + Math.random() * 90}deg`);
+      particle.style.setProperty('--particle-delay', `${Math.random() * 0.16}s`);
+      particle.style.setProperty('--particle-scale', `${0.7 + Math.random() * 0.8}`);
+      container.appendChild(particle);
+    }
+    setTimeout(() => { container.innerHTML = ''; }, 1500);
+  }
+
   function setSessionHeader(current, total, deckName, completed, correct) {
     $('#sessionCounter').textContent = `${current} / ${total}`;
     $('#sessionDeckName').textContent = deckName;
@@ -657,7 +909,9 @@
     const study = state.study;
     if (!study) return resetStudyUi();
     clearTimeout(state.quizAutoTimer);
+    clearTimeout(state.swipeFeedbackTimer);
     revokeQuizImage();
+    revokeSwipeImage();
     const elapsed = Math.max(1, Math.round((Date.now() - study.startedAt) / 60000));
     const accuracy = study.answers ? Math.round((study.correct / study.answers) * 100) : 0;
     $('#studySession').classList.add('hidden');
@@ -666,11 +920,16 @@
     $('#finishMistakes').classList.add('hidden');
     $('#repeatMistakesButton').classList.add('hidden');
 
-    if (study.mode === 'quiz') {
-      state.lastQuizMistakes = [...study.wrongCards];
+    if (study.mode === 'quiz' || study.mode === 'swipe') {
+      const isSwipe = study.mode === 'swipe';
+      state.lastMistakeMode = study.mode;
+      if (isSwipe) state.lastSwipeMistakes = [...study.wrongCards];
+      else state.lastQuizMistakes = [...study.wrongCards];
       $('#finishTitle').textContent = accuracy >= 85 ? 'Отличный результат!' : accuracy >= 60 ? 'Хорошая тренировка!' : 'Ошибки уже стали полезнее';
-      $('#finishSummary').textContent = `Тест завершён: ${study.correct} правильных ответов из ${study.answers}.`;
-      $('#finishStats').innerHTML = `<div><strong>${study.correct}/${study.answers}</strong><small>правильно</small></div><div><strong>${accuracy}%</strong><small>точность</small></div><div><strong>${elapsed} мин</strong><small>время</small></div>`;
+      $('#finishSummary').textContent = isSwipe
+        ? `Свайп-тренировка завершена: ${study.correct} верных решений из ${study.answers}.`
+        : `Тест завершён: ${study.correct} правильных ответов из ${study.answers}.`;
+      $('#finishStats').innerHTML = `<div><strong>${study.correct}/${study.answers}</strong><small>${isSwipe ? 'решений' : 'правильно'}</small></div><div><strong>${accuracy}%</strong><small>точность</small></div><div><strong>${elapsed} мин</strong><small>время</small></div>`;
       if (study.wrongCards.length) {
         $('#finishMistakes').classList.remove('hidden');
         $('#finishMistakes').innerHTML = `<strong>Слова с ошибками</strong><div class="mistake-chips">${study.wrongCards.map((card) => `<span>${escapeHtml(card.word)}</span>`).join('')}</div>`;
@@ -691,7 +950,16 @@
     refreshAll();
   }
 
-  function repeatQuizMistakes() {
+  function repeatMistakes() {
+    if (state.lastMistakeMode === 'swipe') {
+      if (!state.lastSwipeMistakes.length || !state.lastSwipeConfig) return;
+      const config = state.lastSwipeConfig;
+      setStudyMode('swipe');
+      $('#swipeDirection').value = config.direction;
+      $('#swipeAffectsSrs').checked = config.affectsSrs;
+      startSwipeStudy(config.deckIds, state.lastSwipeMistakes.length, state.lastSwipeMistakes);
+      return;
+    }
     if (!state.lastQuizMistakes.length || !state.lastQuizConfig) return;
     const config = state.lastQuizConfig;
     setStudyMode('quiz');
@@ -703,8 +971,10 @@
 
   function resetStudyUi() {
     clearTimeout(state.quizAutoTimer);
+    clearTimeout(state.swipeFeedbackTimer);
     state.study = null;
     revokeQuizImage();
+    revokeSwipeImage();
     $('#studySetup').classList.remove('hidden');
     $('#studySession').classList.add('hidden');
     $('#studyFinished').classList.add('hidden');
@@ -740,6 +1010,14 @@
       } else if (state.study.answered && ['Space', 'Enter'].includes(event.code)) {
         event.preventDefault();
         nextQuizQuestion();
+      }
+    } else if (state.study.mode === 'swipe') {
+      if (['ArrowLeft', 'KeyA'].includes(event.code)) {
+        event.preventDefault();
+        answerSwipe(false);
+      } else if (['ArrowRight', 'KeyD'].includes(event.code)) {
+        event.preventDefault();
+        answerSwipe(true);
       }
     }
   }

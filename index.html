@@ -60,7 +60,7 @@
           <div class="hero-copy">
             <span class="hero-tag">Μικρά βήματα · μεγάλη πρόοδος</span>
             <h2>Запоминай через<br><em>образы и контекст.</em></h2>
-            <p>Карточки, тест с четырьмя вариантами, интервальное повторение и одна переносимая SQLite-база.</p>
+            <p>Карточки, тест с четырьмя вариантами, свайп-пары, интервальное повторение и одна переносимая SQLite-база.</p>
             <div class="hero-actions">
               <button class="button light nav-action" data-page="study">Начать сессию <span>→</span></button>
               <button class="button glass nav-action" data-page="decks">Открыть сборники</button>
@@ -124,6 +124,7 @@
             <div class="mode-selector" role="group" aria-label="Режим обучения">
               <button type="button" class="mode-option active" data-study-mode="flashcards"><span>↻</span><div><strong>Карточки</strong><small>Вспомнить и оценить</small></div></button>
               <button type="button" class="mode-option" data-study-mode="quiz"><span>4</span><div><strong>Четыре варианта</strong><small>Быстрый тест</small></div></button>
+              <button type="button" class="mode-option" data-study-mode="swipe"><span>⇆</span><div><strong>Свайп-пары</strong><small>Верно или неверно</small></div></button>
             </div>
 
             <div class="selection-head"><button id="selectAllDecks" class="text-button">Выбрать все</button><span id="selectedCount">0 выбрано</span></div>
@@ -153,6 +154,20 @@
               </div>
             </div>
 
+            <div id="swipeOptions" class="study-options hidden">
+              <label class="field"><span>Исходный язык</span>
+                <select id="swipeDirection">
+                  <option value="el-ru">Греческое слово → русский перевод</option>
+                  <option value="ru-el">Русское слово → греческий перевод</option>
+                </select>
+              </label>
+              <div class="config-row">
+                <div><strong>Учитывать в интервальном повторении</strong><small>Ошибка распознавания = «Снова», верное решение = «Трудно»</small></div>
+                <label class="switch"><input id="swipeAffectsSrs" type="checkbox"><span></span></label>
+              </div>
+              <div class="swipe-rule-note"><span>←</span><div><strong>Свайп влево — перевод неверный</strong><small>Свайп вправо — слово и перевод совпадают</small></div><span>→</span></div>
+            </div>
+
             <label class="field compact-field"><span>Количество карточек</span><input id="studyLimit" type="number" min="1" max="500" value="30"></label>
             <button id="startStudyButton" class="button primary full">Начать тренировку</button>
           </article>
@@ -163,9 +178,9 @@
               <div class="preview-card preview-middle"></div>
               <div class="preview-card preview-front"><span>εικόνα</span><strong>θυμάμαι</strong><small>[θiˈmame]</small><i>я помню</i></div>
             </div>
-            <span class="panel-kicker">ДВА РЕЖИМА</span>
-            <h3>Вспоминание + распознавание</h3>
-            <p>Карточки развивают самостоятельное вспоминание, а тест помогает быстро закрепить большой набор слов.</p>
+            <span class="panel-kicker">ТРИ РЕЖИМА</span>
+            <h3>Вспоминание, выбор и интуиция</h3>
+            <p>Карточки тренируют память, тест — распознавание, а свайп-пары учат быстро замечать правильные и ложные переводы.</p>
           </article>
         </div>
 
@@ -219,6 +234,34 @@
               <div id="quizFeedback" class="quiz-feedback hidden"></div>
               <button id="quizNextButton" class="button primary full hidden">Следующий вопрос →</button>
             </article>
+          </div>
+
+          <div id="swipeSession" class="swipe-session hidden">
+            <div id="swipeArena" class="swipe-arena">
+              <div class="swipe-shadow-card swipe-shadow-card-back"></div>
+              <div class="swipe-shadow-card swipe-shadow-card-middle"></div>
+              <article id="swipeCard" class="swipe-card" tabindex="0" aria-label="Свайпните влево, если перевод неверный, или вправо, если верный">
+                <div class="swipe-stamp swipe-stamp-left">✕ НЕВЕРНО</div>
+                <div class="swipe-stamp swipe-stamp-right">ВЕРНО ✓</div>
+                <div class="swipe-card-head"><span id="swipeDirectionBadge" class="deck-badge">EL → RU</span><span id="swipeDeckBadge" class="quiz-deck">Сборник</span></div>
+                <div id="swipeImageBox" class="swipe-image-box"></div>
+                <p id="swipePromptLabel" class="swipe-caption">ИСХОДНОЕ СЛОВО</p>
+                <h2 id="swipePrompt" class="swipe-prompt"></h2>
+                <div id="swipePromptTranscription" class="swipe-transcription"></div>
+                <div class="swipe-divider"><span>⇅</span></div>
+                <p class="swipe-caption">ПРЕДЛОЖЕННЫЙ ПЕРЕВОД</p>
+                <h3 id="swipeCandidate" class="swipe-candidate"></h3>
+                <div id="swipeCandidateTranscription" class="swipe-transcription"></div>
+                <div class="swipe-card-hint"><span>← неверно</span><span>верно →</span></div>
+              </article>
+              <div id="swipeFeedback" class="swipe-feedback hidden"></div>
+              <div id="swipeParticles" class="swipe-particles" aria-hidden="true"></div>
+            </div>
+            <div class="swipe-actions">
+              <button id="swipeLeftButton" type="button" class="swipe-action swipe-action-left" aria-label="Перевод неверный"><strong>×</strong><span>Неверно</span></button>
+              <div id="swipeRoundInfo" class="swipe-round-info"><strong>Сравни пару</strong><small>Можно свайпнуть карточку</small></div>
+              <button id="swipeRightButton" type="button" class="swipe-action swipe-action-right" aria-label="Перевод верный"><strong>✓</strong><span>Верно</span></button>
+            </div>
           </div>
         </div>
 
