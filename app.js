@@ -26,8 +26,18 @@
     editImageAuthor: '',
     editImageSourceUrl: '',
     pendingImageSource: null,
-    imageLab: null
+    imageLab: null,
+    pexels: {
+      context: 'card',
+      query: '',
+      page: 1,
+      totalResults: 0,
+      results: [],
+      loading: false
+    }
   };
+
+  const PEXELS_KEY_STORAGE = 'lexianchor.pexelsApiKey';
 
   const pageMeta = {
     dashboard: ['ТВОЙ ПРОГРЕСС', 'Обзор'],
@@ -56,6 +66,13 @@
   function bindEvents() {
     document.addEventListener('click', handleGlobalClick);
     $('#quickStudyButton').addEventListener('click', () => showPage('study'));
+    $('#settingsButton').addEventListener('click', openSettingsDialog);
+    $('#closeSettingsDialog').addEventListener('click', closeSettingsDialog);
+    $('#cancelSettingsButton').addEventListener('click', closeSettingsDialog);
+    $('#settingsForm').addEventListener('submit', saveSettings);
+    $('#togglePexelsKey').addEventListener('click', togglePexelsKeyVisibility);
+    $('#testPexelsKey').addEventListener('click', testPexelsKey);
+    $('#clearPexelsKey').addEventListener('click', clearPexelsKey);
     $('#newDeckButton').addEventListener('click', createDeckFlow);
     $('#newCardButton').addEventListener('click', () => openCardDialog());
     $('#imageLabAllButton').addEventListener('click', () => openImageLab([]));
@@ -78,6 +95,7 @@
       event.stopPropagation();
       speakCurrentWord();
     });
+    $('#cardImageAttribution').addEventListener('click', (event) => event.stopPropagation());
     $$('.rating').forEach((button) => button.addEventListener('click', () => rateCurrentCard(Number(button.dataset.rating))));
 
     $('#cardForm').addEventListener('submit', saveCardFromDialog);
@@ -86,6 +104,7 @@
     $('#deleteCardButton').addEventListener('click', deleteCurrentCard);
     $('#cardImageInput').addEventListener('change', handleImageSelection);
     $('#removeImageButton').addEventListener('click', removeEditImage);
+    $('#pexelsCardButton').addEventListener('click', () => openPexelsDialog('card'));
     $('#googleImagesButton').addEventListener('click', openGoogleImages);
     $('#pasteImageButton').addEventListener('click', () => readClipboardImage(setEditImageFromFile, showPasteFallback));
     $('#closePasteFallback').addEventListener('click', hidePasteFallback);
@@ -93,6 +112,7 @@
     $('#cardDialog').addEventListener('paste', handlePastedImage);
 
     $('#closeImageLab').addEventListener('click', closeImageLab);
+    $('#imageLabPexels').addEventListener('click', () => openPexelsDialog('lab'));
     $('#imageLabGoogle').addEventListener('click', openImageLabGoogle);
     $('#imageLabPaste').addEventListener('click', () => readClipboardImage(setImageLabImageFromFile, showImageLabPasteFallback));
     $('#imageLabFile').addEventListener('change', handleImageLabFile);
@@ -101,6 +121,19 @@
     $('#imageLabSkip').addEventListener('click', skipImageLabCard);
     $('#imageLabRemove').addEventListener('click', clearImageLabImage);
     $('#imageLabSaveNext').addEventListener('click', saveImageLabAndNext);
+    $('#imageLabAutoRemaining').addEventListener('click', autoFillImageLabRemaining);
+
+    $('#closePexelsDialog').addEventListener('click', closePexelsDialog);
+    $('#pexelsSearchButton').addEventListener('click', () => searchPexels(true));
+    $('#pexelsSearchInput').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        searchPexels(true);
+      }
+    });
+    $('#pexelsLoadMore').addEventListener('click', () => searchPexels(false));
+    $('#pexelsUseFirst').addEventListener('click', useFirstPexelsResult);
+    $('#pexelsResults').addEventListener('click', handlePexelsResultClick);
 
     $('#csvFileInput').addEventListener('change', (event) => handleCsvFile(event.target.files[0]));
     $('#csvDropzone').addEventListener('dragover', (event) => {
@@ -432,8 +465,10 @@
     if (card.image_blob?.length) {
       state.cardImageUrl = bytesToObjectUrl(card.image_blob, card.image_mime);
       box.innerHTML = `<img src="${state.cardImageUrl}" alt="Визуальный якорь для ${escapeHtml(card.word)}">`;
+      renderImageAttribution($('#cardImageAttribution'), card.image_source, card.image_author, card.image_source_url);
     } else {
       box.innerHTML = '<div class="image-placeholder"><span>✦</span><small>У карточки пока нет визуального якоря</small></div>';
+      renderImageAttribution($('#cardImageAttribution'), '', '', '');
     }
   }
 
@@ -754,7 +789,7 @@
       state.editImageRemoved = false;
       state.editImageSource = state.pendingImageSource?.source || 'clipboard';
       state.editImageSourceUrl = state.pendingImageSource?.url || '';
-      state.editImageAuthor = '';
+      state.editImageAuthor = state.pendingImageSource?.author || '';
       state.pendingImageSource = null;
       renderEditImagePreview();
       return true;
@@ -780,8 +815,10 @@
     if (state.editImageBytes?.length) {
       state.previewImageUrl = bytesToObjectUrl(state.editImageBytes, state.editImageMime);
       box.innerHTML = `<img src="${state.previewImageUrl}" alt="Предпросмотр изображения">`;
+      renderImageAttribution($('#editImageAttribution'), state.editImageSource, state.editImageAuthor, state.editImageSourceUrl);
     } else {
       box.innerHTML = '<div><span>✦</span><small>Изображение-якорь</small></div>';
+      renderImageAttribution($('#editImageAttribution'), '', '', '');
     }
   }
 
@@ -799,6 +836,318 @@
     const url = googleImagesUrl(query);
     state.pendingImageSource = { source: 'google', url };
     window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  function getPexelsKey() {
+    try {
+      return localStorage.getItem(PEXELS_KEY_STORAGE) || '';
+    } catch (error) {
+      console.warn('Unable to read Pexels key', error);
+      return '';
+    }
+  }
+
+  function setPexelsKey(value) {
+    try {
+      if (value) localStorage.setItem(PEXELS_KEY_STORAGE, value);
+      else localStorage.removeItem(PEXELS_KEY_STORAGE);
+      return true;
+    } catch (error) {
+      console.warn('Unable to save Pexels key', error);
+      toast('Браузер не разрешил сохранить ключ локально', 'error');
+      return false;
+    }
+  }
+
+  function openSettingsDialog() {
+    const key = getPexelsKey();
+    $('#pexelsApiKeyInput').value = key;
+    $('#pexelsApiKeyInput').type = 'password';
+    $('#togglePexelsKey').textContent = 'Показать';
+    updatePexelsKeyBadge(Boolean(key));
+    $('#settingsDialog').showModal();
+  }
+
+  function closeSettingsDialog() {
+    $('#settingsDialog').close();
+  }
+
+  function updatePexelsKeyBadge(configured, text = '') {
+    const badge = $('#pexelsKeyBadge');
+    badge.textContent = text || (configured ? 'Настроено' : 'Не настроено');
+    badge.classList.toggle('connected', configured);
+  }
+
+  function saveSettings(event) {
+    event.preventDefault();
+    const key = $('#pexelsApiKeyInput').value.trim();
+    if (!setPexelsKey(key)) return;
+    updatePexelsKeyBadge(Boolean(key));
+    closeSettingsDialog();
+    toast(key ? 'Pexels API key сохранён на этом устройстве' : 'Pexels API key удалён');
+  }
+
+  function togglePexelsKeyVisibility() {
+    const input = $('#pexelsApiKeyInput');
+    const visible = input.type === 'text';
+    input.type = visible ? 'password' : 'text';
+    $('#togglePexelsKey').textContent = visible ? 'Показать' : 'Скрыть';
+  }
+
+  function clearPexelsKey() {
+    $('#pexelsApiKeyInput').value = '';
+    setPexelsKey('');
+    updatePexelsKeyBadge(false);
+    toast('Pexels API key удалён с этого устройства');
+  }
+
+  async function testPexelsKey() {
+    const key = $('#pexelsApiKeyInput').value.trim();
+    if (!key) return toast('Сначала вставь Pexels API key', 'error');
+    const button = $('#testPexelsKey');
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Проверяю…';
+    try {
+      await requestPexels('Greek language', 1, 1, key);
+      updatePexelsKeyBadge(true, 'Ключ работает');
+      toast('Подключение к Pexels работает');
+    } catch (error) {
+      updatePexelsKeyBadge(false, 'Ошибка ключа');
+      toast(error.message || 'Не удалось проверить ключ', 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  function openPexelsDialog(context = 'card') {
+    const key = getPexelsKey();
+    if (!key) {
+      toast('Сначала добавь Pexels API key в настройках', 'error');
+      openSettingsDialog();
+      return;
+    }
+    state.pexels.context = context;
+    state.pexels.results = [];
+    state.pexels.page = 1;
+    state.pexels.totalResults = 0;
+    const query = context === 'lab'
+      ? $('#imageLabQuery').value.trim()
+      : $('#editImageSearchQuery').value.trim() || $('#editWordTranslation').value.trim() || $('#editWord').value.trim();
+    state.pexels.query = query;
+    $('#pexelsSearchInput').value = query;
+    $('#pexelsResults').innerHTML = '';
+    $('#pexelsEmpty').classList.remove('hidden');
+    $('#pexelsLoadMore').classList.add('hidden');
+    $('#pexelsUseFirst').classList.add('hidden');
+    $('#pexelsStatus').textContent = query ? 'Нажмите «Найти», чтобы увидеть варианты' : 'Введите поисковый запрос';
+    $('#pexelsDialog').showModal();
+    if (query) searchPexels(true);
+    else if (!isMobileLike()) setTimeout(() => $('#pexelsSearchInput').focus(), 60);
+  }
+
+  function closePexelsDialog() {
+    $('#pexelsDialog').close();
+  }
+
+  async function requestPexels(query, page = 1, perPage = 12, key = getPexelsKey()) {
+    if (!key) throw new Error('Pexels API key не настроен');
+    const params = new URLSearchParams({
+      query,
+      page: String(page),
+      per_page: String(perPage),
+      orientation: 'landscape',
+      locale: /[Ͱ-Ͽ]/.test(query) ? 'el-GR' : /[Ѐ-ӿ]/.test(query) ? 'ru-RU' : 'en-US'
+    });
+    const response = await fetch(`https://api.pexels.com/v1/search?${params}`, {
+      headers: { Authorization: key }
+    });
+    if (!response.ok) {
+      if (response.status === 401) throw new Error('Pexels отклонил API key');
+      if (response.status === 429) throw new Error('Лимит запросов Pexels исчерпан');
+      throw new Error(`Ошибка Pexels API: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async function searchPexels(reset = true) {
+    if (state.pexels.loading) return;
+    const query = $('#pexelsSearchInput').value.trim();
+    if (!query) return toast('Введите запрос для поиска картинки', 'error');
+    state.pexels.loading = true;
+    const button = $('#pexelsSearchButton');
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Ищу…';
+    try {
+      const page = reset ? 1 : state.pexels.page + 1;
+      const data = await requestPexels(query, page, 12);
+      state.pexels.query = query;
+      state.pexels.page = page;
+      state.pexels.totalResults = Number(data.total_results || 0);
+      state.pexels.results = reset ? (data.photos || []) : [...state.pexels.results, ...(data.photos || [])];
+      renderPexelsResults();
+    } catch (error) {
+      toast(error.message || 'Не удалось выполнить поиск Pexels', 'error');
+      $('#pexelsStatus').textContent = error.message || 'Ошибка поиска';
+    } finally {
+      state.pexels.loading = false;
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  function renderPexelsResults() {
+    const photos = state.pexels.results;
+    $('#pexelsEmpty').classList.toggle('hidden', photos.length > 0);
+    $('#pexelsUseFirst').classList.toggle('hidden', photos.length === 0);
+    $('#pexelsLoadMore').classList.toggle('hidden', !photos.length || photos.length >= state.pexels.totalResults);
+    $('#pexelsStatus').textContent = photos.length
+      ? `${formatNumber(state.pexels.totalResults)} результатов · показано ${photos.length}`
+      : 'По этому запросу ничего не найдено';
+    $('#pexelsResults').innerHTML = photos.map((photo) => `
+      <button type="button" class="pexels-photo" data-pexels-id="${photo.id}" aria-label="Выбрать фото ${escapeHtml(photo.alt || '')}">
+        <img src="${escapeHtml(photo.src?.medium || photo.src?.small || '')}" alt="${escapeHtml(photo.alt || state.pexels.query)}" loading="lazy">
+        <span><strong>${escapeHtml(photo.photographer || 'Pexels')}</strong><small>Выбрать изображение</small></span>
+      </button>
+    `).join('');
+  }
+
+  async function handlePexelsResultClick(event) {
+    const item = event.target.closest('[data-pexels-id]');
+    if (!item) return;
+    const photo = state.pexels.results.find((entry) => Number(entry.id) === Number(item.dataset.pexelsId));
+    if (photo) await choosePexelsPhoto(photo, item);
+  }
+
+  async function useFirstPexelsResult() {
+    const photo = state.pexels.results[0];
+    if (photo) await choosePexelsPhoto(photo, $('#pexelsUseFirst'));
+  }
+
+  async function choosePexelsPhoto(photo, trigger = null) {
+    const original = trigger?.innerHTML;
+    if (trigger) {
+      trigger.disabled = true;
+      if (trigger.matches('.pexels-photo')) trigger.classList.add('loading');
+      else trigger.textContent = 'Загружаю…';
+    }
+    try {
+      const file = await downloadPexelsPhoto(photo);
+      const metadata = {
+        source: 'pexels',
+        url: photo.url || '',
+        author: photo.photographer || 'Pexels'
+      };
+      let success = false;
+      if (state.pexels.context === 'lab') {
+        if (!state.imageLab) throw new Error('Лаборатория картинок уже закрыта');
+        state.imageLab.pendingSource = metadata;
+        success = await setImageLabImageFromFile(file);
+        $('#imageLabQuery').value = state.pexels.query;
+      } else {
+        state.pendingImageSource = metadata;
+        success = await setEditImageFromFile(file);
+        $('#editImageSearchQuery').value = state.pexels.query;
+      }
+      if (success) {
+        closePexelsDialog();
+        toast(`Фото ${photo.photographer ? `от ${photo.photographer}` : 'из Pexels'} выбрано`);
+      }
+    } catch (error) {
+      toast(error.message || 'Не удалось загрузить фотографию', 'error');
+    } finally {
+      if (trigger) {
+        trigger.disabled = false;
+        trigger.classList.remove?.('loading');
+        if (original !== undefined) trigger.innerHTML = original;
+      }
+    }
+  }
+
+  async function downloadPexelsPhoto(photo) {
+    const url = photo.src?.large || photo.src?.landscape || photo.src?.medium || photo.src?.original;
+    if (!url) throw new Error('Pexels не вернул ссылку на изображение');
+    const response = await fetch(url, { mode: 'cors', credentials: 'omit' });
+    if (!response.ok) throw new Error(`Не удалось скачать изображение: ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('Pexels вернул файл неизвестного формата');
+    return new File([blob], `pexels-${photo.id}.${blob.type.split('/')[1] || 'jpg'}`, { type: blob.type });
+  }
+
+  async function autoFillImageLabRemaining() {
+    const lab = state.imageLab;
+    if (!lab) return;
+    if (lab.autoRunning) {
+      lab.autoCancel = true;
+      $('#imageLabAutoRemaining').textContent = 'Останавливаю…';
+      return;
+    }
+    if (!getPexelsKey()) {
+      toast('Сначала добавь Pexels API key в настройках', 'error');
+      openSettingsDialog();
+      return;
+    }
+    const remaining = Math.min(100, Math.max(0, lab.queue.length - lab.index));
+    if (!remaining) return toast('Нет карточек для автоподбора', 'error');
+    const ok = await confirmAction(
+      'Автоматически подобрать картинки?',
+      `Для ${remaining} карточек будет выбран первый результат Pexels. После этого картинки можно заменить вручную. Максимум 100 карточек за один запуск.`,
+      'Начать автоподбор'
+    );
+    if (!ok) return;
+    lab.autoRunning = true;
+    lab.autoCancel = false;
+    const button = $('#imageLabAutoRemaining');
+    button.textContent = '■ Остановить';
+    button.classList.add('danger');
+    let added = 0;
+    let skipped = 0;
+    try {
+      const end = Math.min(lab.queue.length, lab.index + remaining);
+      for (let i = lab.index; i < end; i += 1) {
+        if (lab.autoCancel) break;
+        const card = lab.queue[i];
+        const query = (card.image_search_query || card.word_translation || card.word || '').trim();
+        lab.index = i;
+        $('#imageLabCounter').textContent = `${i + 1} / ${lab.queue.length}`;
+        $('#imageLabProgress').style.width = `${Math.round((i / lab.queue.length) * 100)}%`;
+        $('#imageLabWord').textContent = card.word;
+        $('#imageLabTranslation').textContent = `Ищу: ${query}`;
+        try {
+          if (!query) throw new Error('Пустой запрос');
+          const data = await requestPexels(query, 1, 1);
+          const photo = data.photos?.[0];
+          if (!photo) throw new Error('Нет результатов');
+          const file = await downloadPexelsPhoto(photo);
+          const processed = await resizeImage(file, 900, 700, 0.80);
+          LexiDB.updateCard({
+            ...card,
+            image_search_query: query,
+            image_blob: processed.bytes,
+            image_mime: processed.mime,
+            image_source: 'pexels',
+            image_author: photo.photographer || 'Pexels',
+            image_source_url: photo.url || ''
+          });
+          added += 1;
+          lab.processed += 1;
+        } catch (error) {
+          console.warn(`Autopick skipped card ${card.id}`, error);
+          skipped += 1;
+        }
+        lab.index = i + 1;
+        await new Promise((resolve) => setTimeout(resolve, 180));
+      }
+    } finally {
+      lab.autoRunning = false;
+      lab.autoCancel = false;
+      button.textContent = '⚡ Автоподбор оставшихся';
+      button.classList.remove('danger');
+      renderImageLab();
+      toast(`Автоподбор завершён: ${added} добавлено, ${skipped} пропущено`);
+    }
   }
 
   async function readClipboardImage(onFile, showFallback) {
@@ -890,15 +1239,23 @@
       mime: '',
       source: '',
       sourceUrl: '',
+      author: '',
       previewUrl: null,
       pendingSource: null,
-      processed: 0
+      processed: 0,
+      autoRunning: false,
+      autoCancel: false
     };
     $('#imageLabDialog').showModal();
     renderImageLab();
   }
 
   function closeImageLab() {
+    if (state.imageLab?.autoRunning) {
+      state.imageLab.autoCancel = true;
+      toast('Останавливаю автоподбор…');
+      return;
+    }
     clearImageLabPreviewUrl();
     $('#imageLabDialog').close();
     $('#imageLabFile').value = '';
@@ -955,9 +1312,11 @@
       state.imageLab.mime = processed.mime;
       state.imageLab.source = state.imageLab.pendingSource?.source || 'clipboard';
       state.imageLab.sourceUrl = state.imageLab.pendingSource?.url || '';
+      state.imageLab.author = state.imageLab.pendingSource?.author || '';
       state.imageLab.pendingSource = null;
       state.imageLab.previewUrl = bytesToObjectUrl(processed.bytes, processed.mime);
       $('#imageLabPreview').innerHTML = `<img src="${state.imageLab.previewUrl}" alt="Предпросмотр">`;
+      renderImageAttribution($('#imageLabAttribution'), state.imageLab.source, state.imageLab.author, state.imageLab.sourceUrl);
       $('#imageLabPasteFallback').classList.add('hidden');
       return true;
     } catch (error) {
@@ -973,7 +1332,9 @@
     state.imageLab.mime = '';
     state.imageLab.source = '';
     state.imageLab.sourceUrl = '';
+    state.imageLab.author = '';
     $('#imageLabPreview').innerHTML = '<div><span>✦</span><small>Выбери визуальный якорь</small></div>';
+    renderImageAttribution($('#imageLabAttribution'), '', '', '');
   }
 
   function clearImageLabPreviewUrl() {
@@ -1027,7 +1388,7 @@
       image_blob: lab.bytes,
       image_mime: lab.mime,
       image_source: lab.source,
-      image_author: '',
+      image_author: lab.author || '',
       image_source_url: lab.sourceUrl
     });
     lab.processed += 1;
@@ -1335,6 +1696,20 @@
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function renderImageAttribution(node, source, author, url) {
+    if (!node) return;
+    if (source !== 'pexels') {
+      node.classList.add('hidden');
+      node.innerHTML = '';
+      return;
+    }
+    const label = `Photo by ${author || 'Pexels'} on Pexels`;
+    node.innerHTML = url
+      ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+      : escapeHtml(label);
+    node.classList.remove('hidden');
   }
 
   function googleImagesUrl(query) {

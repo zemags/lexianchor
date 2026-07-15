@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lexianchor-v1.2.0';
+const CACHE_NAME = 'lexianchor-v1.3.0';
 const REMOTE_ASSETS = [
   'https://cdn.jsdelivr.net/npm/sql.js@1.14.1/dist/sql-wasm.js',
   'https://cdn.jsdelivr.net/npm/sql.js@1.14.1/dist/sql-wasm.wasm'
@@ -38,6 +38,9 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  const cacheable = url.origin === self.location.origin || REMOTE_ASSETS.includes(event.request.url);
+  if (!cacheable) return;
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;

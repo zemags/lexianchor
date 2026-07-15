@@ -50,6 +50,7 @@
         </div>
         <div class="top-actions">
           <div id="dbStatus" class="db-status"><span></span>SQLite сохранена</div>
+          <button id="settingsButton" class="icon-button settings-button" type="button" aria-label="Настройки" title="Настройки">⚙</button>
           <button id="quickStudyButton" class="button primary">Начать тренировку</button>
         </div>
       </header>
@@ -184,7 +185,7 @@
                 <div class="flashcard-inner">
                   <div class="flashcard-face flashcard-front">
                     <div class="card-topline"><span id="cardDeckBadge" class="deck-badge">Сборник</span><button id="speakButton" class="round-button" aria-label="Произнести по-гречески">◖))</button></div>
-                    <div id="cardImageBox" class="card-image-box"></div>
+                    <div id="cardImageBox" class="card-image-box"></div><div id="cardImageAttribution" class="image-attribution hidden"></div>
                     <div class="word-block"><div id="cardWord" class="card-word"></div><div id="cardWordTranscription" class="transcription"></div></div>
                     <div class="example-block"><span class="example-label">ПРИМЕР</span><div id="cardExample" class="example-text"></div><div id="cardExampleTranscription" class="example-transcription"></div></div>
                     <div class="flip-hint">Нажми, чтобы увидеть перевод <span>↻</span></div>
@@ -295,7 +296,7 @@
 
       <section class="image-editor">
         <div class="image-preview-column">
-          <div id="editImagePreview" class="edit-image-preview"><div><span>✦</span><small>Изображение-якорь</small></div></div>
+          <div id="editImagePreview" class="edit-image-preview"><div><span>✦</span><small>Изображение-якорь</small></div></div><div id="editImageAttribution" class="image-attribution hidden"></div>
           <button type="button" id="removeImageButton" class="text-button danger">Удалить изображение</button>
         </div>
         <div class="image-tools">
@@ -303,8 +304,8 @@
           <p>Лучший результат обычно даёт короткий запрос на английском. Картинка будет уменьшена до WebP и сохранена прямо в базе.</p>
           <label class="field image-query-field"><span>Запрос для картинки</span><input id="editImageSearchQuery" type="text" placeholder="Например: cool morning breeze"></label>
           <div class="image-action-grid">
-            <button type="button" id="googleImagesButton" class="image-action google-action"><span>G</span><div><strong>Google Картинки</strong><small>Открыть поиск по запросу</small></div></button>
-            <button type="button" id="pixabayButton" class="image-action pixabay-action" disabled title="Будет доступно в следующей версии"><span>P</span><div><strong>Pixabay</strong><small>Скоро · встроенная галерея</small></div></button>
+            <button type="button" id="pexelsCardButton" class="image-action pexels-action featured-action"><span>P</span><div><strong>Найти в Pexels</strong><small>Выбрать внутри приложения</small></div></button>
+            <button type="button" id="googleImagesButton" class="image-action google-action"><span>G</span><div><strong>Google Картинки</strong><small>Резервный внешний поиск</small></div></button>
             <button type="button" id="pasteImageButton" class="image-action"><span>⎘</span><div><strong>Вставить</strong><small>Из буфера обмена</small></div></button>
             <label class="image-action file-action"><span>⇧</span><div><strong>Фото / файл</strong><small>Выбрать на устройстве</small></div><input id="cardImageInput" type="file" accept="image/*" hidden></label>
           </div>
@@ -329,23 +330,59 @@
       <div id="imageLabContent">
         <div class="image-lab-progress"><span id="imageLabCounter">1 / 10</span><div class="progress-track"><div id="imageLabProgress" class="progress-fill"></div></div><span id="imageLabDeck">Сборник</span></div>
         <div class="image-lab-layout">
-          <div id="imageLabPreview" class="image-lab-preview"><div><span>✦</span><small>Выбери визуальный якорь</small></div></div>
+          <div><div id="imageLabPreview" class="image-lab-preview"><div><span>✦</span><small>Выбери визуальный якорь</small></div></div><div id="imageLabAttribution" class="image-attribution hidden"></div></div>
           <div class="image-lab-copy">
             <span class="deck-badge" id="imageLabDeckBadge">Сборник</span>
             <h3 id="imageLabWord">λέξη</h3>
             <p id="imageLabTranslation">перевод</p>
             <label class="field"><span>Запрос на английском</span><input id="imageLabQuery" type="text"></label>
             <div class="image-action-grid compact-grid">
-              <button type="button" id="imageLabGoogle" class="image-action google-action"><span>G</span><div><strong>Google</strong><small>Найти картинки</small></div></button>
-              <button type="button" id="imageLabPixabay" class="image-action pixabay-action" disabled><span>P</span><div><strong>Pixabay</strong><small>Скоро</small></div></button>
+              <button type="button" id="imageLabPexels" class="image-action pexels-action featured-action"><span>P</span><div><strong>Найти в Pexels</strong><small>Галерея внутри приложения</small></div></button>
+              <button type="button" id="imageLabGoogle" class="image-action google-action"><span>G</span><div><strong>Google</strong><small>Резервный поиск</small></div></button>
               <button type="button" id="imageLabPaste" class="image-action"><span>⎘</span><div><strong>Вставить</strong><small>Из буфера</small></div></button>
               <label class="image-action file-action"><span>⇧</span><div><strong>Выбрать</strong><small>Фото / файл</small></div><input id="imageLabFile" type="file" accept="image/*" hidden></label>
             </div>
             <div id="imageLabPasteFallback" class="paste-fallback hidden"><div class="paste-fallback-head"><div><strong>Вставка на iPhone / iPad</strong><small>Удерживай поле и выбери «Вставить».</small></div></div><div id="imageLabPasteTarget" class="paste-target" contenteditable="true" inputmode="none" data-placeholder="Нажми и удерживай здесь → Вставить"></div></div>
           </div>
         </div>
-        <div class="image-lab-actions"><button type="button" id="imageLabSkip" class="button surface">Пропустить</button><button type="button" id="imageLabRemove" class="button danger ghost-danger">Очистить</button><span></span><button type="button" id="imageLabSaveNext" class="button primary">Сохранить и далее →</button></div>
+        <div class="image-lab-actions"><button type="button" id="imageLabSkip" class="button surface">Пропустить</button><button type="button" id="imageLabRemove" class="button danger ghost-danger">Очистить</button><button type="button" id="imageLabAutoRemaining" class="button secondary">⚡ Автоподбор оставшихся</button><span></span><button type="button" id="imageLabSaveNext" class="button primary">Сохранить и далее →</button></div>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog" class="modal settings-modal">
+    <form id="settingsForm" method="dialog">
+      <div class="modal-head">
+        <div><span class="panel-kicker">НАСТРОЙКИ</span><h2>Интеграции</h2></div>
+        <button type="button" id="closeSettingsDialog" class="icon-button">×</button>
+      </div>
+      <section class="integration-card">
+        <div class="integration-logo pexels-logo">P</div>
+        <div class="integration-copy">
+          <div class="integration-title"><div><strong>Pexels</strong><small>Встроенный поиск бесплатных фотографий</small></div><span id="pexelsKeyBadge" class="connection-badge">Не настроено</span></div>
+          <label class="field"><span>Pexels API key</span><div class="secret-input"><input id="pexelsApiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="Вставьте ваш API-ключ"><button type="button" id="togglePexelsKey" class="text-button">Показать</button></div></label>
+          <p class="integration-note">Ключ хранится только в localStorage этого браузера. Он не записывается в SQLite и не загружается на GitHub. На телефоне ключ нужно ввести отдельно.</p>
+          <div class="integration-actions"><button type="button" id="testPexelsKey" class="button surface">Проверить ключ</button><button type="button" id="clearPexelsKey" class="text-button danger">Удалить ключ</button></div>
+        </div>
+      </section>
+      <div class="modal-actions settings-actions"><span></span><button type="button" id="cancelSettingsButton" class="button surface">Отмена</button><button type="submit" class="button primary">Сохранить настройки</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="pexelsDialog" class="modal pexels-modal">
+    <form method="dialog" onsubmit="return false">
+      <div class="modal-head pexels-head">
+        <div><span class="panel-kicker">ВСТРОЕННЫЙ ПОИСК</span><h2>Выбрать изображение</h2></div>
+        <button type="button" id="closePexelsDialog" class="icon-button">×</button>
+      </div>
+      <div class="pexels-searchbar">
+        <div class="search-wrap"><span>⌕</span><input id="pexelsSearchInput" type="search" placeholder="Например: cool morning breeze"></div>
+        <button type="button" id="pexelsSearchButton" class="button primary">Найти</button>
+      </div>
+      <div class="pexels-toolbar"><span id="pexelsStatus">Введите запрос и нажмите «Найти»</span><button type="button" id="pexelsUseFirst" class="text-button hidden">Использовать первое</button></div>
+      <div id="pexelsResults" class="pexels-grid"></div>
+      <div id="pexelsEmpty" class="empty-state compact-empty"><strong>Поиск внутри LexiAnchor</strong><span>Нажмите на подходящую фотографию — она сразу загрузится, уменьшится до WebP и сохранится внутри SQLite.</span></div>
+      <div class="pexels-footer"><span>Photos provided by <a href="https://www.pexels.com" target="_blank" rel="noopener noreferrer">Pexels</a></span><button type="button" id="pexelsLoadMore" class="button surface hidden">Показать ещё</button></div>
     </form>
   </dialog>
 
