@@ -17,6 +17,8 @@
     lastQuizConfig: null,
     lastSwipeMistakes: [],
     lastSwipeConfig: null,
+    lastTypingMistakes: [],
+    lastTypingConfig: null,
     lastMistakeMode: 'quiz',
     quizImageUrl: null,
     swipeImageUrl: null,
@@ -24,6 +26,7 @@
     swipeGesture: null,
     quizAutoTimer: null,
     cardImageUrl: null,
+    cardSecondaryImageUrl: null,
     previewImageUrl: null,
     editImageBytes: null,
     editImageMime: '',
@@ -34,6 +37,13 @@
     editImageSearchQueryEn: '',
     editImageSearchQueryEnSource: '',
     editImageSearchTranslationProvider: '',
+    editSecondaryImageBytes: null,
+    editSecondaryImageMime: '',
+    editSecondaryImageRemoved: false,
+    editSecondaryImageSource: '',
+    editSecondaryImageAuthor: '',
+    editSecondaryImageSourceUrl: '',
+    secondaryPreviewUrl: null,
     pendingImageSource: null,
     imageLab: null,
     pexels: {
@@ -57,6 +67,10 @@
   const PEXELS_KEY_STORAGE = 'lexianchor.pexelsApiKey';
   const MYMEMORY_EMAIL_STORAGE = 'lexianchor.myMemoryEmail';
   const AUTO_TRANSLATE_STORAGE = 'lexianchor.autoTranslateImageQueries';
+  const DAILY_NEW_STORAGE = 'lexianchor.dailyNewCards';
+  const DAILY_LIMIT_STORAGE = 'lexianchor.dailyReviewLimit';
+  const BACKUP_DAYS_STORAGE = 'lexianchor.backupReminderDays';
+  const LAST_BACKUP_STORAGE = 'lexianchor.lastBackupAt';
 
   const pageMeta = {
     dashboard: ['ТВОЙ ПРОГРЕСС', 'Обзор'],
@@ -84,7 +98,12 @@
 
   function bindEvents() {
     document.addEventListener('click', handleGlobalClick);
-    $('#quickStudyButton').addEventListener('click', () => showPage('study'));
+    $('#quickStudyButton').addEventListener('click', startDailyStudy);
+    $('#dailyStudyButton').addEventListener('click', startDailyStudy);
+    $('#quickTwoMinutes').addEventListener('click', () => startQuickSession(8));
+    $('#quickFiveMinutes').addEventListener('click', () => startQuickSession(18));
+    $('#hardWordsButton').addEventListener('click', startHardWordsSession);
+    $('#dashboardBackupButton').addEventListener('click', () => exportDatabase('lexianchor'));
     $('#settingsButton').addEventListener('click', openSettingsDialog);
     $('#closeSettingsDialog').addEventListener('click', closeSettingsDialog);
     $('#cancelSettingsButton').addEventListener('click', closeSettingsDialog);
@@ -112,6 +131,8 @@
     $('#repeatMistakesButton').addEventListener('click', repeatMistakes);
     $('#quizNextButton').addEventListener('click', nextQuizQuestion);
     $('#quizAnswers').addEventListener('click', handleQuizAnswerClick);
+    $('#typingAnswerForm').addEventListener('submit', submitTypingAnswer);
+    $('#typingNextButton').addEventListener('click', nextTypingQuestion);
     $('#swipeLeftButton').addEventListener('click', () => answerSwipe(false));
     $('#swipeRightButton').addEventListener('click', () => answerSwipe(true));
     $('#swipeCard').addEventListener('pointerdown', handleSwipePointerDown);
@@ -131,6 +152,10 @@
     $('#deleteCardButton').addEventListener('click', deleteCurrentCard);
     $('#cardImageInput').addEventListener('change', handleImageSelection);
     $('#removeImageButton').addEventListener('click', removeEditImage);
+    $('#secondaryImageInput').addEventListener('change', handleSecondaryImageSelection);
+    $('#removeSecondaryImageButton').addEventListener('click', removeSecondaryImage);
+    $('#rotateImageButton').addEventListener('click', rotatePrimaryImage);
+    $('#contextImageSearchButton').addEventListener('click', searchImageByContext);
     $('#pexelsCardButton').addEventListener('click', () => openPexelsDialog('card'));
     $('#googleImagesButton').addEventListener('click', openGoogleImages);
     $('#pasteImageButton').addEventListener('click', () => readClipboardImage(setEditImageFromFile, showPasteFallback));
@@ -150,6 +175,7 @@
     $('#imageLabPasteTarget').addEventListener('input', handleImageLabPasteTargetInput);
     $('#imageLabDialog').addEventListener('paste', handleImageLabPaste);
     $('#imageLabQuery').addEventListener('input', clearImageLabTranslationCache);
+    $('#imageLabContextSearch').addEventListener('click', searchImageLabByContext);
     $('#imageLabSkip').addEventListener('click', skipImageLabCard);
     $('#imageLabRemove').addEventListener('click', clearImageLabImage);
     $('#imageLabSaveNext').addEventListener('click', saveImageLabAndNext);
@@ -233,7 +259,7 @@
     const stats = LexiDB.getStats();
     const dbInfo = LexiDB.getDatabaseInfo();
     const quiz = LexiDB.getQuizStats(30);
-    const imageCoverage = dbInfo.cards ? Math.round((dbInfo.images / dbInfo.cards) * 100) : 0;
+    const imageCoverage = dbInfo.cards ? Math.round(((dbInfo.cardsWithImages ?? dbInfo.images) / dbInfo.cards) * 100) : 0;
     const cards = [
       ['Карточек всего', formatNumber(stats.total), '▦'],
       ['На сегодня', formatNumber(stats.due), '◷'],
@@ -259,6 +285,7 @@
     const deckContainer = $('#dashboardDecks');
     if (!state.decks.length) {
       deckContainer.innerHTML = emptyState('Пока нет сборников', 'Импортируй первый CSV или создай сборник вручную.');
+      renderDashboardInsights(stats);
       return;
     }
     deckContainer.innerHTML = state.decks.slice(0, 5).map((deck) => {
@@ -269,6 +296,65 @@
         <div class="deck-progress-value">${progress}%</div>
       </div>`;
     }).join('');
+    renderDashboardInsights(stats);
+  }
+
+  function renderDashboardInsights(stats) {
+    const dailyLimit = Number(getLocalSetting(DAILY_LIMIT_STORAGE, '30')) || 30;
+    const newLimit = Number(getLocalSetting(DAILY_NEW_STORAGE, '5')) || 5;
+    const plan = state.decks.length ? LexiDB.getDailyPlanCards([], dailyLimit, newLimit) : [];
+    const due = plan.filter((card) => new Date(card.due_at).getTime() <= Date.now()).length;
+    const fresh = plan.filter((card) => Number(card.repetitions || 0) === 0).length;
+    $('#dailyPlanSummary').innerHTML = plan.length
+      ? `<div><strong>${plan.length}</strong><small>карточек</small></div><div><strong>${due}</strong><small>повторить</small></div><div><strong>${fresh}</strong><small>новых</small></div><div><strong>≈ ${Math.max(2, Math.ceil(plan.length * .28))}</strong><small>минут</small></div>`
+      : `<p class="muted">Добавь карточки — здесь появится ежедневная сессия.</p>`;
+    $('#dailyPlanBadge').textContent = plan.length ? `${plan.length} сегодня` : 'нет карточек';
+    const advanced = LexiDB.getAdvancedStats(30);
+    $('#hardWordsMetric').textContent = `${advanced.hard} ${plural(advanced.hard, 'сложное', 'сложных', 'сложных')}`;
+    const modeNames = { quiz: '4 варианта', swipe: 'Свайпы', typing: 'Ввод', flashcards: 'Карточки' };
+    $('#modeStats').innerHTML = advanced.modes.length ? advanced.modes.map((item) => `<div class="mode-stat-row"><span>${escapeHtml(modeNames[item.mode] || item.mode)}</span><div class="mini-progress"><i style="width:${item.accuracy}%"></i></div><strong>${item.accuracy}%</strong><small>${item.total}</small></div>`).join('') : emptyState('Статистика появится после тренировок', 'Ответы из тестов, свайпов и ручного ввода будут сравниваться отдельно.');
+    $('#upcomingReviews').innerHTML = `<strong>Следующие 7 дней</strong><div>${advanced.upcoming.map((item) => `<span><b>${item.count}</b><small>${new Date(`${item.date}T12:00:00`).toLocaleDateString('ru-RU',{weekday:'short'})}</small></span>`).join('')}</div>`;
+    const lastBackup = getLocalSetting(LAST_BACKUP_STORAGE, '');
+    const lastChange = LexiDB.getLastChangeAt();
+    const reminderDays = Number(getLocalSetting(BACKUP_DAYS_STORAGE, '7')) || 7;
+    const backupAge = lastBackup ? (Date.now() - new Date(lastBackup).getTime()) / 86400000 : Infinity;
+    const changedSince = lastChange && (!lastBackup || new Date(lastChange) > new Date(lastBackup));
+    const needsBackup = changedSince && backupAge >= reminderDays;
+    $('#backupPanel').classList.toggle('backup-warning', Boolean(needsBackup));
+    $('#backupTitle').textContent = needsBackup ? 'Пора сделать резервную копию' : 'Резервная копия под контролем';
+    $('#backupText').textContent = lastBackup ? `Последний экспорт: ${new Date(lastBackup).toLocaleDateString('ru-RU')}${changedSince ? ' · после него база изменялась' : ''}.` : 'Экспорт ещё не создавался. Один .sqlite содержит слова, картинки и прогресс.';
+  }
+
+  function startDailyStudy() {
+    if (!state.decks.length) return toast('Сначала добавь хотя бы один сборник', 'error');
+    const limit = Number(getLocalSetting(DAILY_LIMIT_STORAGE, '30')) || 30;
+    const newLimit = Number(getLocalSetting(DAILY_NEW_STORAGE, '5')) || 5;
+    const cards = LexiDB.getDailyPlanCards([], limit, newLimit);
+    if (!cards.length) return toast('Для ежедневной сессии пока нет карточек', 'error');
+    startFlashcardStudyWithCards(cards);
+  }
+
+  function startQuickSession(limit) {
+    if (!state.decks.length) return toast('Сначала добавь сборник', 'error');
+    const cards = LexiDB.getDailyPlanCards([], limit, Math.min(3, limit));
+    if (!cards.length) return toast('Нет карточек для тренировки', 'error');
+    startFlashcardStudyWithCards(cards);
+  }
+
+  function startHardWordsSession() {
+    const cards = LexiDB.getDifficultCards([], 30);
+    if (!cards.length) return toast('Сложные слова пока не накопились', 'error');
+    showPage('study');
+    setStudyMode('typing');
+    startTyping([], cards.length, cards);
+  }
+
+  function startFlashcardStudyWithCards(cards) {
+    state.studyMode = 'flashcards';
+    state.study = {mode:'flashcards',queue:cards.map((card)=>({...card,_relearning:false})),relearningQueue:[],initialTotal:cards.length,completed:0,answers:0,correct:0,again:0,startedAt:Date.now(),flipped:false};
+    showPage('study');
+    openStudySession('flashcards');
+    renderCurrentCard();
   }
 
   function renderDecks() {
@@ -344,17 +430,18 @@
     $('#cardsPanelTitle').textContent = deck.name;
     const cards = LexiDB.getCards(deckId);
     $('#cardsTable').innerHTML = cards.length ? cards.map((card) => `
-      <div class="card-row"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')} ${card.image_blob?.length ? '· ✦' : '· без картинки'}</span><button class="button surface compact" data-card-id="${card.id}">Изменить</button></div>
+      <div class="card-row"><strong>${escapeHtml(card.word)}${card.tags ? `<small class="tag-list-inline">${normalizeTags(card.tags).split(', ').map((tag)=>`<i class="tag-chip">${escapeHtml(tag)}</i>`).join('')}</small>` : ''}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')} ${(card.image_blob?.length || card.secondary_image_blob?.length) ? '· ✦' : '· без картинки'}</span><button class="button surface compact" data-card-id="${card.id}">Изменить</button></div>
     `).join('') : emptyState('В сборнике пока пусто', 'Добавь карточку вручную или импортируй CSV.');
   }
 
   function setStudyMode(mode) {
-    state.studyMode = ['flashcards', 'quiz', 'swipe'].includes(mode) ? mode : 'flashcards';
+    state.studyMode = ['flashcards', 'quiz', 'swipe', 'typing'].includes(mode) ? mode : 'flashcards';
     $$('.mode-option').forEach((button) => button.classList.toggle('active', button.dataset.studyMode === state.studyMode));
     $('#flashcardOptions').classList.toggle('hidden', state.studyMode !== 'flashcards');
     $('#quizOptions').classList.toggle('hidden', state.studyMode !== 'quiz');
     $('#swipeOptions').classList.toggle('hidden', state.studyMode !== 'swipe');
-    const labels = { flashcards: 'Начать тренировку', quiz: 'Начать тест', swipe: 'Начать свайп-тренировку' };
+    $('#typingOptions').classList.toggle('hidden', state.studyMode !== 'typing');
+    const labels = { flashcards: 'Начать тренировку', quiz: 'Начать тест', swipe: 'Начать свайп-тренировку', typing: 'Начать письменную тренировку' };
     $('#startStudyButton').textContent = labels[state.studyMode];
   }
 
@@ -391,15 +478,17 @@
     clearTimeout(state.quizAutoTimer);
     const deckIds = $$('#studyDeckList input:checked').map((input) => Number(input.value));
     const limit = Math.max(1, Math.min(Number($('#studyLimit').value || 30), 500));
+    const tag = normalizeAnswer($('#studyTagFilter').value);
     if (!deckIds.length) return toast('Выбери хотя бы один сборник', 'error');
-    if (state.studyMode === 'quiz') startQuiz(deckIds, limit);
-    else if (state.studyMode === 'swipe') startSwipeStudy(deckIds, limit);
-    else startFlashcardStudy(deckIds, limit);
+    if (state.studyMode === 'quiz') startQuiz(deckIds, limit, null, tag);
+    else if (state.studyMode === 'swipe') startSwipeStudy(deckIds, limit, null, tag);
+    else if (state.studyMode === 'typing') startTyping(deckIds, limit, null, tag);
+    else startFlashcardStudy(deckIds, limit, tag);
   }
 
-  function startFlashcardStudy(deckIds, limit) {
+  function startFlashcardStudy(deckIds, limit, tag = '') {
     const dueOnly = $('#dueOnlyToggle').checked;
-    const cards = LexiDB.getStudyCards(deckIds, dueOnly, limit);
+    const cards = LexiDB.getStudyCards(deckIds, dueOnly, tag ? 500 : limit).filter((card)=>!tag || parseTags(card.tags).has(tag)).slice(0,limit);
     if (!cards.length) {
       toast(dueOnly ? 'Нет карточек по расписанию. Отключи этот переключатель.' : 'В выбранных сборниках нет карточек.', 'error');
       return;
@@ -420,11 +509,11 @@
     renderCurrentCard();
   }
 
-  function startQuiz(deckIds, limit, forcedCards = null) {
+  function startQuiz(deckIds, limit, forcedCards = null, tag = '') {
     const direction = $('#quizDirection').value;
     const affectsSrs = $('#quizAffectsSrs').checked;
     const autoNext = $('#quizAutoNext').checked;
-    const allSelectedCards = deckIds.flatMap((id) => LexiDB.getCards(id));
+    const allSelectedCards = deckIds.flatMap((id) => LexiDB.getCards(id)).filter((card)=>!tag || parseTags(card.tags).has(tag));
     const field = direction === 'el-ru' ? 'word_translation' : 'word';
     const promptField = direction === 'el-ru' ? 'word' : 'word_translation';
     const validPool = allSelectedCards.filter((card) => String(card[field] || '').trim() && String(card[promptField] || '').trim());
@@ -456,15 +545,94 @@
     renderQuizQuestion();
   }
 
+
+  function startTyping(deckIds, limit, forcedCards = null, tag = '') {
+    const direction = $('#typingDirection').value;
+    const affectsSrs = $('#typingAffectsSrs').checked;
+    const tolerance = $('#typingTolerance').value;
+    const sourceCards = (forcedCards || deckIds.flatMap((id) => LexiDB.getCards(id))).filter((card)=>!tag || parseTags(card.tags).has(tag));
+    const answerField = direction === 'el-ru' ? 'word_translation' : 'word';
+    const promptField = direction === 'el-ru' ? 'word' : 'word_translation';
+    const pool = sourceCards.filter((card) => String(card[answerField] || '').trim() && String(card[promptField] || '').trim());
+    const questions = forcedCards ? [...pool] : shuffle([...pool]).slice(0, limit);
+    if (!questions.length) return toast('Нет карточек с заполненным словом и переводом', 'error');
+    state.study = {mode:'typing',queue:questions,index:0,initialTotal:questions.length,answers:0,correct:0,wrongCards:[],startedAt:Date.now(),direction,affectsSrs,tolerance,answered:false,questionStartedAt:Date.now()};
+    state.lastTypingConfig = {deckIds:[...deckIds],direction,affectsSrs,tolerance};
+    openStudySession('typing');
+    renderTypingQuestion();
+  }
+
+  function renderTypingQuestion() {
+    const study=state.study;
+    if (!study || study.mode!=='typing' || study.index>=study.queue.length) return finishStudy();
+    const card=study.queue[study.index];
+    study.answered=false; study.questionStartedAt=Date.now();
+    const elToRu=study.direction==='el-ru';
+    $('#typingDirectionBadge').textContent=elToRu?'EL → RU':'RU → EL';
+    $('#typingDeckBadge').textContent=card.deck_name;
+    $('#typingPrompt').textContent=elToRu?card.word:card.word_translation;
+    $('#typingPromptTranscription').textContent=elToRu?(card.word_transcription||''):'';
+    $('#typingAnswerInput').value=''; $('#typingAnswerInput').disabled=false;
+    $('#typingFeedback').className='quiz-feedback hidden'; $('#typingFeedback').innerHTML='';
+    $('#typingNextButton').classList.add('hidden');
+    setSessionHeader(study.index+1,study.initialTotal,card.deck_name,study.index,study.correct);
+    setTimeout(()=>$('#typingAnswerInput').focus(),80);
+  }
+
+  function stripAccents(value) {
+    return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  }
+
+  function levenshtein(a,b){
+    const x=[...a], y=[...b], dp=Array(y.length+1).fill(0).map((_,j)=>j);
+    for(let i=1;i<=x.length;i+=1){let prev=dp[0];dp[0]=i;for(let j=1;j<=y.length;j+=1){const tmp=dp[j];dp[j]=Math.min(dp[j]+1,dp[j-1]+1,prev+(x[i-1]===y[j-1]?0:1));prev=tmp;}}
+    return dp[y.length];
+  }
+
+  function typingAnswerMatches(given, expected, tolerance) {
+    let a=normalizeAnswer(given), b=normalizeAnswer(expected);
+    if (tolerance!=='strict'){a=stripAccents(a);b=stripAccents(b);}
+    if (a===b) return true;
+    const variants=b.split(/\s*[;/|]\s*/).filter(Boolean);
+    if (variants.some((v)=>a===v)) return true;
+    if (tolerance==='normal') {
+      const target=variants.sort((x,y)=>Math.abs(x.length-a.length)-Math.abs(y.length-a.length))[0]||b;
+      const allowance=target.length>=10?2:target.length>=5?1:0;
+      return levenshtein(a,target)<=allowance;
+    }
+    return false;
+  }
+
+  function submitTypingAnswer(event) {
+    event.preventDefault();
+    const study=state.study;
+    if (!study || study.mode!=='typing' || study.answered) return;
+    const card=study.queue[study.index];
+    const expected=study.direction==='el-ru'?card.word_translation:card.word;
+    const given=$('#typingAnswerInput').value.trim();
+    if (!given) return toast('Сначала введи ответ','error');
+    const correct=typingAnswerMatches(given,expected,study.tolerance);
+    study.answered=true; study.answers+=1; if(correct)study.correct+=1;else if(!study.wrongCards.some((x)=>x.id===card.id))study.wrongCards.push(card);
+    const responseMs=Date.now()-study.questionStartedAt;
+    LexiDB.recordTrainingAnswer(card.id,'typing',correct,study.direction,responseMs,null);
+    if(study.affectsSrs) LexiDB.rateCard(card.id,correct?2:0);
+    $('#typingAnswerInput').disabled=true;
+    const panel=$('#typingFeedback');panel.className=`quiz-feedback ${correct?'success':'error'}`;
+    panel.innerHTML=`<div class="feedback-title"><span>${correct?'✓':'×'}</span><strong>${correct?'Правильно':'Нужно повторить'}</strong></div><div class="typing-result"><small>Твой ответ</small><b>${escapeHtml(given)}</b><small>Правильный ответ</small><strong>${escapeHtml(expected)}</strong>${card.example_el?`<p>${highlightTerm(card.example_el,card.word)}</p>`:''}${card.example_translation?`<p class="muted">${escapeHtml(card.example_translation)}</p>`:''}${card.hint?`<div class="feedback-hint">✦ ${escapeHtml(card.hint)}</div>`:''}</div>`;
+    $('#typingNextButton').classList.remove('hidden'); $('#sessionScore').textContent=`${study.correct} ✓`;
+  }
+
+  function nextTypingQuestion(){const study=state.study;if(!study||study.mode!=='typing'||!study.answered)return;study.index+=1;renderTypingQuestion();}
+
   function buildSwipeTruthPlan(count) {
     const matches = Math.ceil(count / 2);
     return shuffle(Array.from({ length: count }, (_, index) => index < matches));
   }
 
-  function startSwipeStudy(deckIds, limit, forcedCards = null) {
+  function startSwipeStudy(deckIds, limit, forcedCards = null, tag = '') {
     const direction = $('#swipeDirection').value;
     const affectsSrs = $('#swipeAffectsSrs').checked;
-    const allSelectedCards = deckIds.flatMap((id) => LexiDB.getCards(id));
+    const allSelectedCards = deckIds.flatMap((id) => LexiDB.getCards(id)).filter((card)=>!tag || parseTags(card.tags).has(tag));
     const answerField = direction === 'el-ru' ? 'word_translation' : 'word';
     const promptField = direction === 'el-ru' ? 'word' : 'word_translation';
     const validPool = allSelectedCards.filter((card) => String(card[answerField] || '').trim() && String(card[promptField] || '').trim());
@@ -504,6 +672,7 @@
     $('#studySession').classList.remove('hidden');
     $('#flashcardSession').classList.toggle('hidden', mode !== 'flashcards');
     $('#quizSession').classList.toggle('hidden', mode !== 'quiz');
+    $('#typingSession').classList.toggle('hidden', mode !== 'typing');
     $('#swipeSession').classList.toggle('hidden', mode !== 'swipe');
   }
 
@@ -562,16 +731,14 @@
 
   function renderStudyImage(card) {
     if (state.cardImageUrl) URL.revokeObjectURL(state.cardImageUrl);
-    state.cardImageUrl = null;
+    if (state.cardSecondaryImageUrl) URL.revokeObjectURL(state.cardSecondaryImageUrl);
+    state.cardImageUrl = null; state.cardSecondaryImageUrl = null;
     const box = $('#cardImageBox');
-    if (card.image_blob?.length) {
-      state.cardImageUrl = bytesToObjectUrl(card.image_blob, card.image_mime);
-      box.innerHTML = `<img src="${state.cardImageUrl}" alt="Визуальный якорь для ${escapeHtml(card.word)}">`;
-      renderImageAttribution($('#cardImageAttribution'), card.image_source, card.image_author, card.image_source_url);
-    } else {
-      box.innerHTML = '<div class="image-placeholder"><span>✦</span><small>У карточки пока нет визуального якоря</small></div>';
-      renderImageAttribution($('#cardImageAttribution'), '', '', '');
-    }
+    const images=[];
+    if(card.image_blob?.length){state.cardImageUrl=bytesToObjectUrl(card.image_blob,card.image_mime);images.push(`<figure><img style="object-fit:${card.image_fit==='cover'?'cover':'contain'}" src="${state.cardImageUrl}" alt="Визуальный якорь для ${escapeHtml(card.word)}">${card.image_caption?`<figcaption>${escapeHtml(card.image_caption)}</figcaption>`:''}</figure>`);}
+    if(card.secondary_image_blob?.length){state.cardSecondaryImageUrl=bytesToObjectUrl(card.secondary_image_blob,card.secondary_image_mime);images.push(`<figure><img src="${state.cardSecondaryImageUrl}" alt="Дополнительный якорь для ${escapeHtml(card.word)}"></figure>`);}
+    if(images.length){box.innerHTML=`<div class="anchor-gallery ${images.length>1?'two-anchors':''}">${images.join('')}</div>`;renderImageAttribution($('#cardImageAttribution'),card.image_source,card.image_author,card.image_source_url);}
+    else{box.innerHTML='<div class="image-placeholder"><span>✦</span><small>У карточки пока нет визуального якоря</small></div>';renderImageAttribution($('#cardImageAttribution'),'','','');}
   }
 
   function revealCard() {
@@ -587,6 +754,7 @@
     const study = state.study;
     const card = study.queue.shift();
     const schedule = LexiDB.rateCard(card.id, rating);
+    LexiDB.recordTrainingAnswer(card.id, 'flashcards', rating > 0, 'el-ru', 0, null);
     study.answers += 1;
 
     if (!card._relearning) study.completed += 1;
@@ -614,6 +782,7 @@
     revokeSwipeImage();
     const card = study.queue[study.index];
     study.answered = false;
+    study.questionStartedAt = Date.now();
     study.currentOptions = buildQuizOptions(card, study.pool, study.direction);
     const prompt = study.direction === 'el-ru' ? card.word : card.word_translation;
     const promptTranscription = study.direction === 'el-ru' ? card.word_transcription : '';
@@ -663,6 +832,7 @@
     else if (!study.wrongCards.some((item) => item.id === card.id)) study.wrongCards.push(card);
 
     LexiDB.recordQuizAnswer(card.id, option.correct, study.direction);
+    LexiDB.recordTrainingAnswer(card.id, 'quiz', option.correct, study.direction, Date.now() - (study.questionStartedAt || Date.now()), null);
     if (study.affectsSrs) LexiDB.rateCard(card.id, option.correct ? 1 : 0);
 
     $$('#quizAnswers .quiz-answer').forEach((button, index) => {
@@ -700,6 +870,23 @@
     renderQuizQuestion();
   }
 
+  function parseTags(value) {
+    return new Set(String(value || '').split(/[,;#]+/).map((item) => normalizeAnswer(item)).filter(Boolean));
+  }
+
+  function smartDistractorScore(card, candidate, answerField) {
+    let score = Math.random() * 1.5;
+    const aTags = parseTags(card.tags), bTags = parseTags(candidate.tags);
+    for (const tag of aTags) if (bTags.has(tag)) score += 8;
+    const a = normalizeAnswer(card[answerField]), b = normalizeAnswer(candidate[answerField]);
+    if (Math.abs(a.length - b.length) <= 3) score += 2;
+    if (a[0] && a[0] === b[0]) score += 1.5;
+    if (card.deck_id === candidate.deck_id) score += 2;
+    const typeHints = ['глагол','существительное','прилагательное','наречие','фраза'];
+    for (const hint of typeHints) if (aTags.has(hint) && bTags.has(hint)) score += 5;
+    return score;
+  }
+
   function buildSwipePair(card, pool, direction, requestedMatch) {
     const answerField = direction === 'el-ru' ? 'word_translation' : 'word';
     const correctAnswer = String(card[answerField] || '').trim();
@@ -707,7 +894,7 @@
     let candidateCard = card;
     if (!isMatch) {
       const candidates = pool.filter((candidate) => candidate.id !== card.id && normalizeAnswer(candidate[answerField]) !== normalizeAnswer(correctAnswer));
-      if (candidates.length) candidateCard = candidates[Math.floor(Math.random() * candidates.length)];
+      if (candidates.length) candidateCard = [...candidates].sort((a,b)=>smartDistractorScore(card,b,answerField)-smartDistractorScore(card,a,answerField))[0];
       else isMatch = true;
     }
     return {
@@ -733,6 +920,7 @@
     const pair = buildSwipePair(card, study.pool, study.direction, study.truthPlan[study.index]);
     study.currentPair = pair;
     study.transitioning = false;
+    study.questionStartedAt = Date.now();
 
     const sourceGreek = study.direction === 'el-ru';
     $('#swipeDirectionBadge').textContent = sourceGreek ? 'EL → RU' : 'RU → EL';
@@ -840,6 +1028,7 @@
     else if (!study.wrongCards.some((item) => item.id === pair.card.id)) study.wrongCards.push(pair.card);
 
     LexiDB.recordQuizAnswer(pair.card.id, judgmentCorrect, `swipe-${study.direction}`);
+    LexiDB.recordTrainingAnswer(pair.card.id, 'swipe', judgmentCorrect, study.direction, Date.now() - (study.questionStartedAt || Date.now()), pair.candidateCard?.id || null);
     if (study.affectsSrs) LexiDB.rateCard(pair.card.id, judgmentCorrect ? 1 : 0);
 
     const cardNode = $('#swipeCard');
@@ -920,16 +1109,19 @@
     $('#finishMistakes').classList.add('hidden');
     $('#repeatMistakesButton').classList.add('hidden');
 
-    if (study.mode === 'quiz' || study.mode === 'swipe') {
+    if (study.mode === 'quiz' || study.mode === 'swipe' || study.mode === 'typing') {
       const isSwipe = study.mode === 'swipe';
+      const isTyping = study.mode === 'typing';
       state.lastMistakeMode = study.mode;
       if (isSwipe) state.lastSwipeMistakes = [...study.wrongCards];
+      else if (isTyping) state.lastTypingMistakes = [...study.wrongCards];
       else state.lastQuizMistakes = [...study.wrongCards];
       $('#finishTitle').textContent = accuracy >= 85 ? 'Отличный результат!' : accuracy >= 60 ? 'Хорошая тренировка!' : 'Ошибки уже стали полезнее';
       $('#finishSummary').textContent = isSwipe
         ? `Свайп-тренировка завершена: ${study.correct} верных решений из ${study.answers}.`
+        : isTyping ? `Письменная тренировка завершена: ${study.correct} точных ответов из ${study.answers}.`
         : `Тест завершён: ${study.correct} правильных ответов из ${study.answers}.`;
-      $('#finishStats').innerHTML = `<div><strong>${study.correct}/${study.answers}</strong><small>${isSwipe ? 'решений' : 'правильно'}</small></div><div><strong>${accuracy}%</strong><small>точность</small></div><div><strong>${elapsed} мин</strong><small>время</small></div>`;
+      $('#finishStats').innerHTML = `<div><strong>${study.correct}/${study.answers}</strong><small>${isSwipe ? 'решений' : isTyping ? 'написано' : 'правильно'}</small></div><div><strong>${accuracy}%</strong><small>точность</small></div><div><strong>${elapsed} мин</strong><small>время</small></div>`;
       if (study.wrongCards.length) {
         $('#finishMistakes').classList.remove('hidden');
         $('#finishMistakes').innerHTML = `<strong>Слова с ошибками</strong><div class="mistake-chips">${study.wrongCards.map((card) => `<span>${escapeHtml(card.word)}</span>`).join('')}</div>`;
@@ -951,6 +1143,16 @@
   }
 
   function repeatMistakes() {
+    if (state.lastMistakeMode === 'typing') {
+      if (!state.lastTypingMistakes.length || !state.lastTypingConfig) return;
+      const config = state.lastTypingConfig;
+      setStudyMode('typing');
+      $('#typingDirection').value = config.direction;
+      $('#typingTolerance').value = config.tolerance;
+      $('#typingAffectsSrs').checked = config.affectsSrs;
+      startTyping(config.deckIds, state.lastTypingMistakes.length, state.lastTypingMistakes);
+      return;
+    }
     if (state.lastMistakeMode === 'swipe') {
       if (!state.lastSwipeMistakes.length || !state.lastSwipeConfig) return;
       const config = state.lastSwipeConfig;
@@ -1011,6 +1213,11 @@
         event.preventDefault();
         nextQuizQuestion();
       }
+    } else if (state.study.mode === 'typing') {
+      if (state.study.answered && ['Space', 'Enter'].includes(event.code)) {
+        event.preventDefault();
+        nextTypingQuestion();
+      }
     } else if (state.study.mode === 'swipe') {
       if (['ArrowLeft', 'KeyA'].includes(event.code)) {
         event.preventDefault();
@@ -1044,7 +1251,10 @@
     $('#editExampleTranscription').value = card?.example_transcription || '';
     $('#editExampleTranslation').value = card?.example_translation || '';
     $('#editHint').value = card?.hint || '';
+    $('#editTags').value = card?.tags || '';
     $('#editImageSearchQuery').value = card?.image_search_query || '';
+    $('#editImageFit').value = card?.image_fit || 'contain';
+    $('#editImageCaption').value = card?.image_caption || '';
     state.editImageSearchQueryEn = card?.image_search_query_en || '';
     state.editImageSearchQueryEnSource = card?.image_search_query_en_source || '';
     state.editImageSearchTranslationProvider = card?.image_search_translation_provider || '';
@@ -1055,8 +1265,15 @@
     state.editImageSource = card?.image_source || '';
     state.editImageAuthor = card?.image_author || '';
     state.editImageSourceUrl = card?.image_source_url || '';
+    state.editSecondaryImageBytes = card?.secondary_image_blob || null;
+    state.editSecondaryImageMime = card?.secondary_image_mime || '';
+    state.editSecondaryImageRemoved = false;
+    state.editSecondaryImageSource = card?.secondary_image_source || '';
+    state.editSecondaryImageAuthor = card?.secondary_image_author || '';
+    state.editSecondaryImageSourceUrl = card?.secondary_image_source_url || '';
     state.pendingImageSource = null;
     renderEditImagePreview();
+    renderSecondaryImagePreview();
     $('#deleteCardButton').classList.toggle('hidden', !card);
     hidePasteFallback();
     $('#cardDialog').showModal();
@@ -1066,7 +1283,9 @@
   function closeCardDialog() {
     $('#cardDialog').close();
     clearPreviewImageUrl();
+    clearSecondaryPreviewUrl();
     $('#cardImageInput').value = '';
+    $('#secondaryImageInput').value = '';
     hidePasteFallback();
   }
 
@@ -1083,6 +1302,7 @@
       example_transcription: $('#editExampleTranscription').value.trim(),
       example_translation: $('#editExampleTranslation').value.trim(),
       hint: $('#editHint').value.trim(),
+      tags: normalizeTags($('#editTags').value),
       image_search_query: $('#editImageSearchQuery').value.trim(),
       image_search_query_en: state.editImageSearchQueryEn || '',
       image_search_query_en_source: state.editImageSearchQueryEnSource || '',
@@ -1091,7 +1311,14 @@
       image_mime: state.editImageRemoved ? '' : state.editImageMime,
       image_source: state.editImageRemoved ? '' : state.editImageSource,
       image_author: state.editImageRemoved ? '' : state.editImageAuthor,
-      image_source_url: state.editImageRemoved ? '' : state.editImageSourceUrl
+      image_source_url: state.editImageRemoved ? '' : state.editImageSourceUrl,
+      image_fit: $('#editImageFit').value || 'contain',
+      image_caption: $('#editImageCaption').value.trim(),
+      secondary_image_blob: state.editSecondaryImageRemoved ? null : state.editSecondaryImageBytes,
+      secondary_image_mime: state.editSecondaryImageRemoved ? '' : state.editSecondaryImageMime,
+      secondary_image_source: state.editSecondaryImageRemoved ? '' : state.editSecondaryImageSource,
+      secondary_image_author: state.editSecondaryImageRemoved ? '' : state.editSecondaryImageAuthor,
+      secondary_image_source_url: state.editSecondaryImageRemoved ? '' : state.editSecondaryImageSourceUrl
     };
     if (!payload.word) return toast('Поле «Слово / фраза» обязательно', 'error');
     if (id) LexiDB.updateCard(payload); else LexiDB.insertCard(payload);
@@ -1165,6 +1392,26 @@
     state.previewImageUrl = null;
   }
 
+
+  function normalizeTags(value){return [...new Set(String(value||'').split(/[,;#]+/).map((x)=>x.trim()).filter(Boolean))].join(', ');}
+
+  async function handleSecondaryImageSelection(event){const file=event.target.files[0];event.target.value='';if(!file)return;try{const processed=await resizeImage(file,900,700,.80);state.editSecondaryImageBytes=processed.bytes;state.editSecondaryImageMime=processed.mime;state.editSecondaryImageRemoved=false;state.editSecondaryImageSource='local';state.editSecondaryImageAuthor='';state.editSecondaryImageSourceUrl='';renderSecondaryImagePreview();}catch(error){toast(error.message||'Не удалось обработать второй якорь','error');}}
+
+  function removeSecondaryImage(){state.editSecondaryImageBytes=null;state.editSecondaryImageMime='';state.editSecondaryImageRemoved=true;state.editSecondaryImageSource='';state.editSecondaryImageAuthor='';state.editSecondaryImageSourceUrl='';renderSecondaryImagePreview();}
+
+  function clearSecondaryPreviewUrl(){if(state.secondaryPreviewUrl)URL.revokeObjectURL(state.secondaryPreviewUrl);state.secondaryPreviewUrl=null;}
+
+  function renderSecondaryImagePreview(){clearSecondaryPreviewUrl();const box=$('#secondaryImagePreview');if(state.editSecondaryImageBytes?.length){state.secondaryPreviewUrl=bytesToObjectUrl(state.editSecondaryImageBytes,state.editSecondaryImageMime);box.innerHTML=`<img src="${state.secondaryPreviewUrl}" alt="Второй визуальный якорь">`;box.classList.add('has-image');}else{box.innerHTML='<span>＋</span><small>Нет второго изображения</small>';box.classList.remove('has-image');}}
+
+  async function rotatePrimaryImage(){if(!state.editImageBytes?.length)return toast('Сначала выбери основное изображение','error');try{const file=new File([state.editImageBytes],'anchor',{type:state.editImageMime||'image/webp'});const image=await decodeImage(file);const canvas=document.createElement('canvas');canvas.width=image.height;canvas.height=image.width;const ctx=canvas.getContext('2d');ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(Math.PI/2);ctx.drawImage(image,-image.width/2,-image.height/2);const blob=await new Promise((resolve)=>canvas.toBlob(resolve,'image/webp',.82));if(image.close)image.close();state.editImageBytes=new Uint8Array(await blob.arrayBuffer());state.editImageMime='image/webp';state.editImageRemoved=false;renderEditImagePreview();}catch(error){toast('Не удалось повернуть изображение','error');}}
+
+  async function searchImageByContext(){
+    const context=$('#editExampleTranslation').value.trim()||$('#editExampleEl').value.trim()||$('#editWordTranslation').value.trim()||$('#editWord').value.trim();
+    if(!context)return toast('Добавь пример или перевод слова','error');
+    const button=$('#contextImageSearchButton');const old=button.textContent;button.disabled=true;button.textContent='Готовлю контекст…';
+    try{const result=await resolveEnglishImageQuery(context,{},(message)=>{button.textContent=message||'Перевожу…';});const query=String(result.query||context).split(/\s+/).slice(0,12).join(' ');$('#editImageSearchQuery').value=query;state.editImageSearchQueryEn=containsCyrillic(context)&&result.provider!=='fallback'?query:'';state.editImageSearchQueryEnSource=context;state.editImageSearchTranslationProvider=result.provider||'';renderEditTranslationCache();openPexelsDialog('card');}catch(error){toast(error.message||'Не удалось подготовить запрос','error');}finally{button.disabled=false;button.textContent=old;}
+  }
+
   function openGoogleImages() {
     const queryInput = $('#editImageSearchQuery');
     const fallback = $('#editWordTranslation').value.trim() || $('#editWord').value.trim();
@@ -1204,6 +1451,9 @@
     $('#togglePexelsKey').textContent = 'Показать';
     $('#myMemoryEmailInput').value = getLocalSetting(MYMEMORY_EMAIL_STORAGE, '');
     $('#autoTranslateToggle').checked = getAutoTranslateEnabled();
+    $('#dailyNewCardsInput').value = getLocalSetting(DAILY_NEW_STORAGE, '5');
+    $('#dailyReviewLimitInput').value = getLocalSetting(DAILY_LIMIT_STORAGE, '30');
+    $('#backupReminderDaysInput').value = getLocalSetting(BACKUP_DAYS_STORAGE, '7');
     updatePexelsKeyBadge(Boolean(key));
     updateTranslatorBadge();
     updateTranslatorSupportText();
@@ -1227,10 +1477,14 @@
     if (!setPexelsKey(key)) return;
     if (!setLocalSetting(MYMEMORY_EMAIL_STORAGE, email)) return;
     if (!setLocalSetting(AUTO_TRANSLATE_STORAGE, $('#autoTranslateToggle').checked ? '1' : '0')) return;
+    setLocalSetting(DAILY_NEW_STORAGE, Math.max(0, Math.min(50, Number($('#dailyNewCardsInput').value)||5)));
+    setLocalSetting(DAILY_LIMIT_STORAGE, Math.max(5, Math.min(200, Number($('#dailyReviewLimitInput').value)||30)));
+    setLocalSetting(BACKUP_DAYS_STORAGE, Math.max(1, Math.min(90, Number($('#backupReminderDaysInput').value)||7)));
     updatePexelsKeyBadge(Boolean(key));
     updateTranslatorBadge();
     closeSettingsDialog();
-    toast('Настройки интеграций сохранены на этом устройстве');
+    refreshAll();
+    toast('Настройки сохранены на этом устройстве');
   }
 
   function togglePexelsKeyVisibility() {
@@ -1958,6 +2212,14 @@
     $('#imageLabPasteTarget').innerHTML = '';
   }
 
+  async function searchImageLabByContext(){
+    const lab=state.imageLab;if(!lab)return;const card=lab.queue[lab.index];if(!card)return;
+    const context=card.example_translation||card.example_el||card.word_translation||card.word;
+    if(!context)return toast('Для карточки нет контекста','error');
+    const button=$('#imageLabContextSearch');const old=button.textContent;button.disabled=true;button.textContent='Готовлю запрос…';
+    try{const result=await resolveEnglishImageQuery(context,{},(message)=>{button.textContent=message||'Перевожу…';});const query=String(result.query||context).split(/\s+/).slice(0,12).join(' ');$('#imageLabQuery').value=query;lab.queryEn=containsCyrillic(context)&&result.provider!=='fallback'?query:'';lab.queryEnSource=context;lab.translationProvider=result.provider||'';renderImageLabTranslationCache();openPexelsDialog('lab');}catch(error){toast(error.message||'Не удалось подготовить контекст','error');}finally{button.disabled=false;button.textContent=old;}
+  }
+
   function openImageLabGoogle() {
     const query = $('#imageLabQuery').value.trim();
     if (!query) return toast('Введи поисковый запрос', 'error');
@@ -2175,6 +2437,7 @@
       example_transcription: ['транскрипция', 'транскрипция примера', 'example transcription'],
       example_translation: ['перевод примера', 'example translation'],
       hint: ['подсказка / нюанс', 'подсказка/нюанс', 'подсказка', 'hint', 'note'],
+      tags: ['теги', 'тег', 'tags', 'tag'],
       image_search_query: ['поиск картинки', 'запрос для картинки', 'image search', 'image query']
     };
     const index = {};
@@ -2190,6 +2453,7 @@
       example_transcription: getCell(row, index.example_transcription),
       example_translation: getCell(row, index.example_translation),
       hint: getCell(row, index.hint),
+      tags: normalizeTags(getCell(row, index.tags)),
       image_search_query: getCell(row, index.image_search_query)
     })).filter((card) => card.word);
     if (!cards.length) throw new Error('После заголовка не найдено ни одного слова');
@@ -2202,22 +2466,32 @@
     container.classList.remove('hidden');
     const delimiterName = parsed.delimiter === '\t' ? 'TSV' : parsed.delimiter === ';' ? 'CSV с ;' : 'CSV с ,';
     const warning = parsed.missing.length ? ` · ${parsed.missing.length} необязательных колонок не найдено` : '';
-    container.innerHTML = `<div class="csv-preview-head"><span>${escapeHtml(state.csvFileName)}</span><span>${parsed.cards.length} строк · ${delimiterName}${warning}</span><span>Предпросмотр</span></div>${parsed.cards.slice(0, 5).map((card) => `<div class="csv-preview-row"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')}</span></div>`).join('')}`;
+    const duplicates = LexiDB.findDuplicateWords(parsed.cards);
+    container.innerHTML = `<div class="csv-preview-head"><span>${escapeHtml(state.csvFileName)}</span><span>${parsed.cards.length} строк · ${delimiterName}${warning}</span><span>${duplicates.length ? `⚠ ${duplicates.length} дублей` : 'Дублей нет'}</span></div>${parsed.cards.slice(0, 5).map((card) => `<div class="csv-preview-row"><strong>${escapeHtml(card.word)}</strong><span>${escapeHtml(card.example_el || '—')}</span><span>${escapeHtml(card.word_translation || '—')}</span></div>`).join('')}`;
   }
 
   async function importCsvRows() {
     const deckName = $('#importDeckName').value.trim();
     if (!deckName) return toast('Укажи название сборника', 'error');
     if (!state.csvRows.length) return toast('Сначала выбери CSV-файл', 'error');
-    LexiDB.importCards(deckName, state.csvRows);
-    state.csvRows = [];
-    state.csvFileName = '';
-    $('#csvFileInput').value = '';
-    $('#importDeckName').value = '';
-    $('#csvPreview').classList.add('hidden');
-    $('#importCsvButton').disabled = true;
+    const mode=$('#duplicateImportMode').value;
+    const duplicateItems=LexiDB.findDuplicateWords(state.csvRows);
+    const duplicateByIndex=new Map(duplicateItems.map((item)=>[item.index,item.duplicate]));
+    let toCreate=[]; let updated=0; let skipped=0;
+    state.csvRows.forEach((incoming,index)=>{
+      const duplicate=duplicateByIndex.get(index);
+      if(!duplicate||mode==='create'){toCreate.push(incoming);return;}
+      if(mode==='skip'){skipped+=1;return;}
+      const existing=LexiDB.getCard(Number(duplicate.id));
+      if(!existing){toCreate.push(incoming);return;}
+      const merged={...existing};
+      ['word_transcription','word_translation','example_el','example_transcription','example_translation','hint','tags','image_search_query'].forEach((key)=>{if(incoming[key])merged[key]=incoming[key];});
+      LexiDB.updateCard(merged); updated+=1;
+    });
+    if(toCreate.length) LexiDB.importCards(deckName,toCreate);
+    state.csvRows=[];state.csvFileName='';$('#csvFileInput').value='';$('#importDeckName').value='';$('#csvPreview').classList.add('hidden');$('#importCsvButton').disabled=true;
     await refreshAll();
-    toast(`Сборник «${deckName}» импортирован`);
+    toast(`Импорт завершён: ${toCreate.length} новых${updated?`, ${updated} обновлено`:''}${skipped?`, ${skipped} пропущено`:''}`);
     showPage('decks');
   }
 
@@ -2289,6 +2563,8 @@
     const bytes = LexiDB.exportBytes();
     const stamp = new Date().toISOString().slice(0, 10);
     downloadBlob(new Blob([bytes], { type: 'application/x-sqlite3' }), `${prefix}-${stamp}.sqlite`);
+    setLocalSetting(LAST_BACKUP_STORAGE, new Date().toISOString());
+    setTimeout(() => renderDashboardInsights(LexiDB.getStats()), 50);
   }
 
   async function handleDatabaseFile(event) {

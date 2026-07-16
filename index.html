@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#11131f">
-  <meta name="description" content="LexiAnchor — локальный тренажёр греческих слов с интервальным повторением, тестами, автопереводом запросов и SQLite.">
+  <meta name="description" content="LexiAnchor — локальный тренажёр греческих слов с ручным вводом, интервальным повторением, визуальными якорями и SQLite.">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -60,7 +60,7 @@
           <div class="hero-copy">
             <span class="hero-tag">Μικρά βήματα · μεγάλη πρόοδος</span>
             <h2>Запоминай через<br><em>образы и контекст.</em></h2>
-            <p>Карточки, тест с четырьмя вариантами, свайп-пары, интервальное повторение и одна переносимая SQLite-база.</p>
+            <p>Карточки, ручной ввод, тесты, свайп-пары, сложные слова, визуальные якоря и одна переносимая SQLite-база.</p>
             <div class="hero-actions">
               <button class="button light nav-action" data-page="study">Начать сессию <span>→</span></button>
               <button class="button glass nav-action" data-page="decks">Открыть сборники</button>
@@ -78,6 +78,17 @@
 
         <div id="statsGrid" class="stats-grid"></div>
 
+        <article class="panel daily-plan-panel">
+          <div class="panel-head"><div><span class="panel-kicker">ПЛАН НА СЕГОДНЯ</span><h3>Короткая сессия без настройки</h3></div><span id="dailyPlanBadge" class="metric-chip">готово</span></div>
+          <div id="dailyPlanSummary" class="daily-plan-summary"></div>
+          <div class="daily-plan-actions">
+            <button id="dailyStudyButton" class="button primary">Учить на сегодня</button>
+            <button id="quickTwoMinutes" class="button surface">2 минуты</button>
+            <button id="quickFiveMinutes" class="button surface">5 минут</button>
+            <button id="hardWordsButton" class="button secondary">Сложные слова</button>
+          </div>
+        </article>
+
         <div class="dashboard-grid">
           <article class="panel chart-panel">
             <div class="panel-head">
@@ -92,6 +103,15 @@
               <button class="text-button nav-action" data-page="decks">Все сборники</button>
             </div>
             <div id="dashboardDecks" class="deck-progress-list"></div>
+          </article>
+          <article class="panel advanced-stats-panel">
+            <div class="panel-head"><div><span class="panel-kicker">КАЧЕСТВО ПАМЯТИ</span><h3>Точность по режимам</h3></div><span id="hardWordsMetric" class="metric-chip">0 сложных</span></div>
+            <div id="modeStats" class="mode-stats"></div>
+            <div id="upcomingReviews" class="upcoming-reviews"></div>
+          </article>
+          <article id="backupPanel" class="panel backup-panel">
+            <div><span class="panel-kicker">РЕЗЕРВНАЯ КОПИЯ</span><h3 id="backupTitle">База защищена</h3><p id="backupText" class="muted"></p></div>
+            <button id="dashboardBackupButton" class="button surface">Скачать .sqlite</button>
           </article>
         </div>
       </section>
@@ -125,10 +145,11 @@
               <button type="button" class="mode-option active" data-study-mode="flashcards"><span>↻</span><div><strong>Карточки</strong><small>Вспомнить и оценить</small></div></button>
               <button type="button" class="mode-option" data-study-mode="quiz"><span>4</span><div><strong>Четыре варианта</strong><small>Быстрый тест</small></div></button>
               <button type="button" class="mode-option" data-study-mode="swipe"><span>⇆</span><div><strong>Свайп-пары</strong><small>Верно или неверно</small></div></button>
+              <button type="button" class="mode-option" data-study-mode="typing"><span>⌨</span><div><strong>Написать ответ</strong><small>Самостоятельно вспомнить</small></div></button>
             </div>
 
             <div class="selection-head"><button id="selectAllDecks" class="text-button">Выбрать все</button><span id="selectedCount">0 выбрано</span></div>
-            <div id="studyDeckList" class="study-deck-list"></div>
+            <div id="studyDeckList" class="study-deck-list"></div><label class="field compact-field"><span>Фильтр по тегу — необязательно</span><input id="studyTagFilter" type="text" placeholder="Например: B2 или глагол"></label>
 
             <div id="flashcardOptions" class="study-options">
               <div class="config-row">
@@ -152,6 +173,12 @@
                 <div><strong>Автопереход</strong><small>Следующий вопрос через 2 секунды</small></div>
                 <label class="switch"><input id="quizAutoNext" type="checkbox"><span></span></label>
               </div>
+            </div>
+
+            <div id="typingOptions" class="study-options hidden">
+              <label class="field"><span>Направление</span><select id="typingDirection"><option value="el-ru">Греческий → написать по-русски</option><option value="ru-el">Русский → написать по-гречески</option></select></label>
+              <label class="field"><span>Проверка ответа</span><select id="typingTolerance"><option value="normal">Допускать небольшие опечатки</option><option value="accentless">Не учитывать греческие ударения</option><option value="strict">Строгое совпадение</option></select></label>
+              <div class="config-row"><div><strong>Учитывать в интервальном повторении</strong><small>Ошибка = «Снова», правильный ответ = «Хорошо»</small></div><label class="switch"><input id="typingAffectsSrs" type="checkbox"><span></span></label></div>
             </div>
 
             <div id="swipeOptions" class="study-options hidden">
@@ -178,9 +205,9 @@
               <div class="preview-card preview-middle"></div>
               <div class="preview-card preview-front"><span>εικόνα</span><strong>θυμάμαι</strong><small>[θiˈmame]</small><i>я помню</i></div>
             </div>
-            <span class="panel-kicker">ТРИ РЕЖИМА</span>
+            <span class="panel-kicker">ЧЕТЫРЕ РЕЖИМА</span>
             <h3>Вспоминание, выбор и интуиция</h3>
-            <p>Карточки тренируют память, тест — распознавание, а свайп-пары учат быстро замечать правильные и ложные переводы.</p>
+            <p>Карточки тренируют память, ручной ввод — активное вспоминание, тест — распознавание, а свайпы учат замечать ложные переводы.</p>
           </article>
         </div>
 
@@ -233,6 +260,18 @@
               <div id="quizAnswers" class="quiz-answers"></div>
               <div id="quizFeedback" class="quiz-feedback hidden"></div>
               <button id="quizNextButton" class="button primary full hidden">Следующий вопрос →</button>
+            </article>
+          </div>
+
+          <div id="typingSession" class="typing-session hidden">
+            <article class="typing-card">
+              <div class="quiz-head"><span id="typingDirectionBadge" class="deck-badge">EL → RU</span><span id="typingDeckBadge" class="quiz-deck">Сборник</span></div>
+              <p class="quiz-caption">Вспомни и напиши перевод</p>
+              <h2 id="typingPrompt" class="typing-prompt"></h2>
+              <div id="typingPromptTranscription" class="quiz-prompt-transcription"></div>
+              <form id="typingAnswerForm" class="typing-answer-form"><input id="typingAnswerInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Введи ответ"><button class="button primary" type="submit">Проверить</button></form>
+              <div id="typingFeedback" class="quiz-feedback hidden"></div>
+              <button id="typingNextButton" class="button primary full hidden">Следующее слово →</button>
             </article>
           </div>
 
@@ -289,6 +328,7 @@
             <label class="field"><span>Название нового сборника</span><input id="importDeckName" type="text" placeholder="Например: Урок 12 — Транспорт"></label>
             <label id="csvDropzone" class="dropzone" for="csvFileInput"><input id="csvFileInput" type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" hidden><span class="drop-icon">⇧</span><strong>Выбрать CSV-файл</strong><small>или перетащить его сюда</small></label>
             <div id="csvPreview" class="csv-preview hidden"></div>
+            <label class="field"><span>Если слово уже существует</span><select id="duplicateImportMode"><option value="skip">Пропустить дубли</option><option value="update">Обновить заполненные поля существующей карточки</option><option value="create">Импортировать копию</option></select></label>
             <button id="importCsvButton" class="button primary full" disabled>Импортировать как отдельный сборник</button>
           </article>
 
@@ -306,7 +346,7 @@
 
         <article class="panel columns-panel">
           <div class="panel-head"><div><span class="panel-kicker">ОЖИДАЕМЫЕ КОЛОНКИ</span><h3>Структура CSV</h3></div><div><a class="text-button" href="sample_cards.csv" download>Пример CSV</a><a class="text-button" href="demo.sqlite" download>Демо SQLite</a></div></div>
-          <div class="column-chips"><span>Слово / фраза</span><span>Транскрипция слова</span><span>Перевод слова</span><span>Пример на греческом</span><span>Транскрипция</span><span>Перевод примера</span><span>Подсказка / нюанс</span><span class="optional-chip">Поиск картинки</span></div>
+          <div class="column-chips"><span>Слово / фраза</span><span>Транскрипция слова</span><span>Перевод слова</span><span>Пример на греческом</span><span>Транскрипция</span><span>Перевод примера</span><span>Подсказка / нюанс</span><span class="optional-chip">Теги</span><span class="optional-chip">Поиск картинки</span></div>
         </article>
       </section>
     </main>
@@ -335,6 +375,7 @@
         <label class="field full-span"><span>Транскрипция примера</span><textarea id="editExampleTranscription" rows="2"></textarea></label>
         <label class="field full-span"><span>Перевод примера</span><textarea id="editExampleTranslation" rows="2"></textarea></label>
         <label class="field full-span"><span>Подсказка / нюанс</span><textarea id="editHint" rows="2"></textarea></label>
+        <label class="field full-span"><span>Теги</span><input id="editTags" type="text" placeholder="глагол, B2, повседневное"><small>Разделяй запятыми — теги используются для фильтрации и умных ложных пар.</small></label>
       </div>
 
       <section class="image-editor">
@@ -346,13 +387,16 @@
           <div class="image-tools-head"><div><span class="panel-kicker">ВИЗУАЛЬНЫЙ ЯКОРЬ</span><h3>Найти и привязать картинку</h3></div><span class="storage-pill">Внутри SQLite</span></div>
           <p>Можно вводить запрос по-русски: перед поиском Pexels приложение автоматически попробует перевести его на английский и сохранит результат в SQLite.</p>
           <label class="field image-query-field"><span>Запрос для картинки</span><input id="editImageSearchQuery" type="text" placeholder="Например: приятная утренняя прохлада"></label>
+          <div class="context-query-actions"><button type="button" id="contextImageSearchButton" class="button secondary compact">✦ Поиск по контексту примера</button><small>Переведёт пример на английский и превратит его в поисковую фразу.</small></div>
           <div id="editTranslationCache" class="translation-cache hidden"></div>
+          <div class="image-display-settings"><label class="field"><span>Отображение</span><select id="editImageFit"><option value="contain">Показывать целиком</option><option value="cover">Заполнять карточку</option></select></label><label class="field"><span>Подпись на карточке</span><input id="editImageCaption" type="text" placeholder="Короткая ассоциация"></label><button type="button" id="rotateImageButton" class="button surface compact">↻ Повернуть 90°</button></div>
           <div class="image-action-grid">
             <button type="button" id="pexelsCardButton" class="image-action pexels-action featured-action"><span>P</span><div><strong>Найти в Pexels</strong><small>Выбрать внутри приложения</small></div></button>
             <button type="button" id="googleImagesButton" class="image-action google-action"><span>G</span><div><strong>Google Картинки</strong><small>Резервный внешний поиск</small></div></button>
             <button type="button" id="pasteImageButton" class="image-action"><span>⎘</span><div><strong>Вставить</strong><small>Из буфера обмена</small></div></button>
             <label class="image-action file-action"><span>⇧</span><div><strong>Фото / файл</strong><small>Выбрать на устройстве</small></div><input id="cardImageInput" type="file" accept="image/*" hidden></label>
           </div>
+          <section class="secondary-anchor-editor"><div class="image-tools-head"><div><span class="panel-kicker">ВТОРОЙ ЯКОРЬ</span><h3>Дополнительная ассоциация</h3></div></div><div class="secondary-anchor-row"><div id="secondaryImagePreview" class="secondary-image-preview"><span>＋</span><small>Нет второго изображения</small></div><div class="secondary-anchor-actions"><label class="button surface file-button">Выбрать изображение<input id="secondaryImageInput" type="file" accept="image/*" hidden></label><button type="button" id="removeSecondaryImageButton" class="text-button danger">Удалить второй якорь</button></div></div></section>
           <div id="mobilePasteFallback" class="paste-fallback hidden" aria-live="polite">
             <div class="paste-fallback-head"><div><strong>Системная вставка на iPhone / iPad</strong><small>Удерживай поле и выбери «Вставить».</small></div><button type="button" id="closePasteFallback" class="icon-button compact-icon">×</button></div>
             <div id="pasteTarget" class="paste-target" contenteditable="true" inputmode="none" role="textbox" data-placeholder="Нажми и удерживай здесь → Вставить"></div>
@@ -380,7 +424,7 @@
             <h3 id="imageLabWord">λέξη</h3>
             <p id="imageLabTranslation">перевод</p>
             <label class="field"><span>Запрос для картинки</span><input id="imageLabQuery" type="text" placeholder="Можно по-русски"></label>
-            <div id="imageLabTranslationCache" class="translation-cache hidden"></div>
+            <div id="imageLabTranslationCache" class="translation-cache hidden"></div><button type="button" id="imageLabContextSearch" class="button secondary compact context-lab-button">✦ Искать по контексту примера</button>
             <div class="image-action-grid compact-grid">
               <button type="button" id="imageLabPexels" class="image-action pexels-action featured-action"><span>P</span><div><strong>Найти в Pexels</strong><small>Галерея внутри приложения</small></div></button>
               <button type="button" id="imageLabGoogle" class="image-action google-action"><span>G</span><div><strong>Google</strong><small>Резервный поиск</small></div></button>
@@ -426,6 +470,7 @@
           <div class="integration-actions"><button type="button" id="testTranslationButton" class="button surface">Проверить перевод</button><span id="translatorSupportText" class="integration-status-text"></span></div>
         </div>
       </section>
+      <section class="integration-card goals-card"><div class="integration-logo goals-logo">◎</div><div class="integration-copy"><div class="integration-title"><div><strong>Ежедневный план</strong><small>Новые слова, повторения и резервные копии</small></div></div><div class="goal-settings-grid"><label class="field"><span>Новых слов в день</span><input id="dailyNewCardsInput" type="number" min="0" max="50" value="5"></label><label class="field"><span>Карточек в ежедневной сессии</span><input id="dailyReviewLimitInput" type="number" min="5" max="200" value="30"></label><label class="field"><span>Напоминать о копии через, дней</span><input id="backupReminderDaysInput" type="number" min="1" max="90" value="7"></label></div></div></section>
       <div class="modal-actions settings-actions"><span></span><button type="button" id="cancelSettingsButton" class="button surface">Отмена</button><button type="submit" class="button primary">Сохранить настройки</button></div>
     </form>
   </dialog>

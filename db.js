@@ -100,6 +100,7 @@
         example_transcription TEXT DEFAULT '',
         example_translation TEXT DEFAULT '',
         hint TEXT DEFAULT '',
+        tags TEXT DEFAULT '',
         image_search_query TEXT DEFAULT '',
         image_search_query_en TEXT DEFAULT '',
         image_search_query_en_source TEXT DEFAULT '',
@@ -109,6 +110,13 @@
         image_source TEXT DEFAULT '',
         image_author TEXT DEFAULT '',
         image_source_url TEXT DEFAULT '',
+        image_fit TEXT DEFAULT 'contain',
+        image_caption TEXT DEFAULT '',
+        secondary_image_blob BLOB,
+        secondary_image_mime TEXT DEFAULT '',
+        secondary_image_source TEXT DEFAULT '',
+        secondary_image_author TEXT DEFAULT '',
+        secondary_image_source_url TEXT DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -144,8 +152,22 @@
       CREATE INDEX IF NOT EXISTS idx_cards_deck ON cards(deck_id);
       CREATE INDEX IF NOT EXISTS idx_srs_due ON srs(due_at);
       CREATE INDEX IF NOT EXISTS idx_reviews_date ON reviews(review_date);
+      CREATE TABLE IF NOT EXISTS training_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+        deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL,
+        direction TEXT DEFAULT '',
+        correct INTEGER NOT NULL,
+        response_ms INTEGER NOT NULL DEFAULT 0,
+        candidate_card_id INTEGER,
+        answered_at TEXT NOT NULL,
+        answer_date TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_quiz_reviews_date ON quiz_reviews(answer_date);
-      INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '3');
+      CREATE INDEX IF NOT EXISTS idx_training_events_card ON training_events(card_id);
+      CREATE INDEX IF NOT EXISTS idx_training_events_date ON training_events(answer_date);
+      INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '4');
     `);
 
     // Forward-compatible additions for old app databases.
@@ -157,6 +179,14 @@
     if (!columnExists('cards', 'image_source')) run("ALTER TABLE cards ADD COLUMN image_source TEXT DEFAULT ''");
     if (!columnExists('cards', 'image_author')) run("ALTER TABLE cards ADD COLUMN image_author TEXT DEFAULT ''");
     if (!columnExists('cards', 'image_source_url')) run("ALTER TABLE cards ADD COLUMN image_source_url TEXT DEFAULT ''");
+    if (!columnExists('cards', 'tags')) run("ALTER TABLE cards ADD COLUMN tags TEXT DEFAULT ''");
+    if (!columnExists('cards', 'image_fit')) run("ALTER TABLE cards ADD COLUMN image_fit TEXT DEFAULT 'contain'");
+    if (!columnExists('cards', 'image_caption')) run("ALTER TABLE cards ADD COLUMN image_caption TEXT DEFAULT ''");
+    if (!columnExists('cards', 'secondary_image_blob')) run('ALTER TABLE cards ADD COLUMN secondary_image_blob BLOB');
+    if (!columnExists('cards', 'secondary_image_mime')) run("ALTER TABLE cards ADD COLUMN secondary_image_mime TEXT DEFAULT ''");
+    if (!columnExists('cards', 'secondary_image_source')) run("ALTER TABLE cards ADD COLUMN secondary_image_source TEXT DEFAULT ''");
+    if (!columnExists('cards', 'secondary_image_author')) run("ALTER TABLE cards ADD COLUMN secondary_image_author TEXT DEFAULT ''");
+    if (!columnExists('cards', 'secondary_image_source_url')) run("ALTER TABLE cards ADD COLUMN secondary_image_source_url TEXT DEFAULT ''");
   }
 
   async function init() {
@@ -251,8 +281,8 @@
       params.push(deckId);
     }
     if (search.trim()) {
-      where.push('(c.word LIKE ? OR c.word_translation LIKE ? OR c.example_el LIKE ? OR c.example_translation LIKE ?)');
-      params.push(searchValue, searchValue, searchValue, searchValue);
+      where.push('(c.word LIKE ? OR c.word_translation LIKE ? OR c.example_el LIKE ? OR c.example_translation LIKE ? OR c.tags LIKE ?)');
+      params.push(searchValue, searchValue, searchValue, searchValue, searchValue);
     }
     return rows(`
       SELECT c.*, d.name AS deck_name, s.due_at, s.interval_days, s.ease, s.repetitions, s.lapses
@@ -274,7 +304,8 @@
       ease: Number(card.ease || 2.5),
       repetitions: Number(card.repetitions || 0),
       lapses: Number(card.lapses || 0),
-      image_blob: card.image_blob instanceof Uint8Array ? card.image_blob : null
+      image_blob: card.image_blob instanceof Uint8Array ? card.image_blob : null,
+      secondary_image_blob: card.secondary_image_blob instanceof Uint8Array ? card.secondary_image_blob : null
     };
   }
 
@@ -293,11 +324,12 @@
     run(`
       INSERT INTO cards(
         deck_id, word, word_transcription, word_translation, example_el,
-        example_transcription, example_translation, hint, image_search_query,
+        example_transcription, example_translation, hint, tags, image_search_query,
         image_search_query_en, image_search_query_en_source, image_search_translation_provider,
-        image_blob, image_mime, image_source, image_author, image_source_url,
+        image_blob, image_mime, image_source, image_author, image_source_url, image_fit, image_caption,
+        secondary_image_blob, secondary_image_mime, secondary_image_source, secondary_image_author, secondary_image_source_url,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       card.deck_id,
       card.word.trim(),
@@ -307,6 +339,7 @@
       card.example_transcription || '',
       card.example_translation || '',
       card.hint || '',
+      card.tags || '',
       card.image_search_query || '',
       card.image_search_query_en || '',
       card.image_search_query_en_source || '',
@@ -316,6 +349,13 @@
       card.image_source || '',
       card.image_author || '',
       card.image_source_url || '',
+      card.image_fit || 'contain',
+      card.image_caption || '',
+      card.secondary_image_blob || null,
+      card.secondary_image_mime || '',
+      card.secondary_image_source || '',
+      card.secondary_image_author || '',
+      card.secondary_image_source_url || '',
       timestamp,
       timestamp
     ]);
@@ -330,10 +370,12 @@
     const timestamp = nowIso();
     run(`
       UPDATE cards SET deck_id = ?, word = ?, word_transcription = ?, word_translation = ?,
-        example_el = ?, example_transcription = ?, example_translation = ?, hint = ?,
+        example_el = ?, example_transcription = ?, example_translation = ?, hint = ?, tags = ?,
         image_search_query = ?, image_search_query_en = ?, image_search_query_en_source = ?,
         image_search_translation_provider = ?, image_blob = ?, image_mime = ?, image_source = ?,
-        image_author = ?, image_source_url = ?, updated_at = ?
+        image_author = ?, image_source_url = ?, image_fit = ?, image_caption = ?,
+        secondary_image_blob = ?, secondary_image_mime = ?, secondary_image_source = ?,
+        secondary_image_author = ?, secondary_image_source_url = ?, updated_at = ?
       WHERE id = ?
     `, [
       card.deck_id,
@@ -344,6 +386,7 @@
       card.example_transcription || '',
       card.example_translation || '',
       card.hint || '',
+      card.tags || '',
       card.image_search_query || '',
       card.image_search_query_en || '',
       card.image_search_query_en_source || '',
@@ -353,6 +396,13 @@
       card.image_source || '',
       card.image_author || '',
       card.image_source_url || '',
+      card.image_fit || 'contain',
+      card.image_caption || '',
+      card.secondary_image_blob || null,
+      card.secondary_image_mime || '',
+      card.secondary_image_source || '',
+      card.secondary_image_author || '',
+      card.secondary_image_source_url || '',
       timestamp,
       card.id
     ]);
@@ -377,11 +427,12 @@
       const cardStmt = db.prepare(`
         INSERT INTO cards(
           deck_id, word, word_transcription, word_translation, example_el,
-          example_transcription, example_translation, hint, image_search_query,
+          example_transcription, example_translation, hint, tags, image_search_query,
           image_search_query_en, image_search_query_en_source, image_search_translation_provider,
-          image_blob, image_mime, image_source, image_author, image_source_url,
+          image_blob, image_mime, image_source, image_author, image_source_url, image_fit, image_caption,
+          secondary_image_blob, secondary_image_mime, secondary_image_source, secondary_image_author, secondary_image_source_url,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', '', '', '', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', '', '', '', 'contain', '', NULL, '', '', '', '', ?, ?)
       `);
       const srsStmt = db.prepare('INSERT INTO srs(card_id, due_at, interval_days, ease, repetitions, lapses) VALUES (?, ?, 0, 2.5, 0, 0)');
       try {
@@ -395,6 +446,7 @@
             card.example_transcription || '',
             card.example_translation || '',
             card.hint || '',
+            card.tags || '',
             card.image_search_query || '',
             card.image_search_query_en || '',
             card.image_search_query_en_source || '',
@@ -607,12 +659,86 @@
     return output;
   }
 
+
+  function normalizeLookup(value) {
+    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('el-GR').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  }
+
+  function recordTrainingAnswer(cardId, mode, correct, direction = '', responseMs = 0, candidateCardId = null) {
+    const card = getCard(cardId);
+    if (!card) return;
+    const timestamp = nowIso();
+    run(`INSERT INTO training_events(card_id, deck_id, mode, direction, correct, response_ms, candidate_card_id, answered_at, answer_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [cardId, card.deck_id, mode, direction || '', correct ? 1 : 0, Math.max(0, Math.round(responseMs || 0)), candidateCardId || null, timestamp, localDate()]);
+    scheduleSave();
+  }
+
+  function getDifficultCards(deckIds = [], limit = 50) {
+    const params = [];
+    let filter = '';
+    if (deckIds.length) {
+      filter = `WHERE c.deck_id IN (${deckIds.map(() => '?').join(',')})`;
+      params.push(...deckIds);
+    }
+    params.push(Math.max(1, Math.min(Number(limit) || 50, 500)));
+    return rows(`
+      SELECT c.*, d.name AS deck_name, s.due_at, s.interval_days, s.ease, s.repetitions, s.lapses,
+             COALESCE(te.total_events, 0) AS training_total,
+             COALESCE(te.wrong_events, 0) AS training_wrong,
+             (s.lapses * 3 + COALESCE(te.wrong_events, 0) * 2 + CASE WHEN s.last_rating = 0 THEN 4 ELSE 0 END) AS difficulty_score
+      FROM cards c JOIN decks d ON d.id=c.deck_id JOIN srs s ON s.card_id=c.id
+      LEFT JOIN (SELECT card_id, COUNT(*) total_events, SUM(CASE WHEN correct=0 THEN 1 ELSE 0 END) wrong_events FROM training_events GROUP BY card_id) te ON te.card_id=c.id
+      ${filter}
+      ORDER BY difficulty_score DESC, s.last_review_at DESC
+      LIMIT ?`, params).map(normalizeCard).filter((card) => Number(card.difficulty_score || 0) > 0);
+  }
+
+  function getDailyPlanCards(deckIds = [], limit = 30, newLimit = 5) {
+    const ids = deckIds.length ? deckIds : getDecks().map((d) => d.id);
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(',');
+    const due = rows(`SELECT c.*, d.name deck_name, s.due_at, s.interval_days, s.ease, s.repetitions, s.lapses FROM cards c JOIN decks d ON d.id=c.deck_id JOIN srs s ON s.card_id=c.id WHERE c.deck_id IN (${placeholders}) AND s.due_at <= ? ORDER BY s.due_at LIMIT ?`, [...ids, nowIso(), limit]).map(normalizeCard);
+    const used = new Set(due.map((c) => c.id));
+    const hard = getDifficultCards(ids, limit).filter((c) => !used.has(c.id)).slice(0, Math.max(0, limit-due.length));
+    hard.forEach((c) => used.add(c.id));
+    const remaining = Math.max(0, limit-due.length-hard.length);
+    const fresh = remaining ? rows(`SELECT c.*, d.name deck_name, s.due_at, s.interval_days, s.ease, s.repetitions, s.lapses FROM cards c JOIN decks d ON d.id=c.deck_id JOIN srs s ON s.card_id=c.id WHERE c.deck_id IN (${placeholders}) AND s.repetitions=0 ORDER BY RANDOM() LIMIT ?`, [...ids, Math.min(remaining, newLimit)]).map(normalizeCard).filter((c)=>!used.has(c.id)) : [];
+    const output=[...due,...hard,...fresh];
+    if (output.length < limit) {
+      const extra=getStudyCards(ids,false,limit*2).filter((c)=>!new Set(output.map(x=>x.id)).has(c.id)).slice(0,limit-output.length);
+      output.push(...extra);
+    }
+    return output.slice(0,limit);
+  }
+
+  function getAdvancedStats(days = 30) {
+    const since = new Date(); since.setDate(since.getDate()-Math.max(1,Number(days)||30));
+    const sinceKey=localDate(since);
+    const modes=rows(`SELECT mode, COUNT(*) total, SUM(CASE WHEN correct=1 THEN 1 ELSE 0 END) correct, AVG(response_ms) avg_ms FROM training_events WHERE answer_date>=? GROUP BY mode ORDER BY total DESC`,[sinceKey]).map((r)=>({mode:r.mode,total:Number(r.total||0),correct:Number(r.correct||0),accuracy:Number(r.total)?Math.round(Number(r.correct||0)/Number(r.total)*100):0,avgMs:Math.round(Number(r.avg_ms||0))}));
+    const hard=Number(scalar(`SELECT COUNT(*) FROM (SELECT c.id, (s.lapses*3 + COALESCE(SUM(CASE WHEN te.correct=0 THEN 1 ELSE 0 END),0)*2) score FROM cards c JOIN srs s ON s.card_id=c.id LEFT JOIN training_events te ON te.card_id=c.id GROUP BY c.id HAVING score>=4)`)||0);
+    const upcoming=[];
+    for (let i=0;i<7;i+=1){const a=new Date();a.setHours(0,0,0,0);a.setDate(a.getDate()+i);const b=new Date(a);b.setDate(b.getDate()+1);upcoming.push({date:localDate(a),count:Number(scalar('SELECT COUNT(*) FROM srs WHERE due_at>=? AND due_at<?',[a.toISOString(),b.toISOString()])||0)});}
+    return {modes,hard,upcoming};
+  }
+
+  function findDuplicateWords(cards) {
+    const existing = rows('SELECT id, deck_id, word, word_translation FROM cards').map((c)=>({...c,key:normalizeLookup(c.word)}));
+    const byKey=new Map(existing.map((c)=>[c.key,c]));
+    return cards.map((card,index)=>({index,card,duplicate:byKey.get(normalizeLookup(card.word))||null})).filter((x)=>x.duplicate);
+  }
+
+  function getLastChangeAt() {
+    const values=[scalar('SELECT MAX(updated_at) FROM cards'),scalar('SELECT MAX(updated_at) FROM decks'),scalar('SELECT MAX(reviewed_at) FROM reviews'),scalar('SELECT MAX(answered_at) FROM training_events')].filter(Boolean).sort();
+    return values.at(-1)||null;
+  }
+
   function getDatabaseInfo() {
     const bytes = db.export();
     return {
       decks: Number(scalar('SELECT COUNT(*) FROM decks') || 0),
       cards: Number(scalar('SELECT COUNT(*) FROM cards') || 0),
-      images: Number(scalar('SELECT COUNT(*) FROM cards WHERE image_blob IS NOT NULL AND length(image_blob) > 0') || 0),
+      images: Number(scalar('SELECT SUM((image_blob IS NOT NULL AND length(image_blob)>0) + (secondary_image_blob IS NOT NULL AND length(secondary_image_blob)>0)) FROM cards') || 0),
+      cardsWithImages: Number(scalar('SELECT COUNT(*) FROM cards WHERE (image_blob IS NOT NULL AND length(image_blob)>0) OR (secondary_image_blob IS NOT NULL AND length(secondary_image_blob)>0)') || 0),
       bytes: bytes.length
     };
   }
@@ -659,7 +785,13 @@
     getStudyCards,
     getCardsWithoutImages,
     recordQuizAnswer,
+    recordTrainingAnswer,
     getQuizStats,
+    getDifficultCards,
+    getDailyPlanCards,
+    getAdvancedStats,
+    findDuplicateWords,
+    getLastChangeAt,
     previewIntervals,
     rateCard,
     getStats,
